@@ -84,8 +84,23 @@ Output columns: `wallet_address`, `anomaly_score`, `anomaly_prediction` (copied 
 `triggered_rules`, `explanation`. Triggered rules are behavioural indicators of unusual behaviour,
 not proof of criminal activity.
 
+Raw dataset time window: 2025-10-01 to 2026-09-24 (about one year, roughly balanced across months;
+synthetic, not real blockchain data).  
 Raw dataset columns (fixed): `timestamp`, `wallet_address`, `amount_btc`, `direction`, `input_count`,
 `output_count`, `counterparty_wallet`.
+
+## Frontend
+Offline investigator UI in `frontend/` (Vite + React + TypeScript, Recharts, React Flow). It reads the
+existing CSV outputs directly; no backend or network access is needed.
+```powershell
+cd frontend
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # type-check + production build
+```
+Screens: Dashboard, Anomalies, Wallet investigation, Cases and Case detail, Transactions / Network,
+Settings. Cases are created only by an investigator and stored in the browser's localStorage for the
+prototype. Exports (CSV/JSON) are generated locally in the browser.
 
 ## More information
 - Technical architecture, ML pipeline, planned UI: [architecture.md](architecture.md)

@@ -33,8 +33,21 @@ SEED = 42                       # fixed seed -> the same dataset every run
 TOTAL_TRANSFERS = 5000          # each transfer = 2 rows -> 10,000 rows
 N_NORMAL_WALLETS = 320          # ordinary wallets that make up the base network
 COMMUNITY_SIZE = 16             # wallets are grouped in small communities
-START = datetime(2025, 1, 1)
-END = datetime(2025, 12, 31, 23, 59, 59)
+START = datetime(2025, 10, 1)
+END = datetime(2026, 9, 24, 23, 59, 59)     # roughly one year of history, ending on 24 September 2026
+N_DAYS = (END.date() - START.date()).days + 1   # 359 calendar days in the window
+
+# Share of all transfers whose anchor time falls in each month (they need not be exact). The
+# generators below place their patterns on an abstract 365-slot timeline; random_time() maps a slot
+# onto a real day using these shares, so activity is balanced across the year and September 2026
+# (only 24 days long) stays at about a tenth of the data at most.
+MONTH_SHARE = {
+    (2025, 10): 8, (2025, 11): 8, (2025, 12): 8,
+    (2026, 1): 8, (2026, 2): 8, (2026, 3): 9, (2026, 4): 8, (2026, 5): 8, (2026, 6): 9,
+    (2026, 7): 8, (2026, 8): 8, (2026, 9): 10,
+}
+TIMELINE_SLOTS = 365            # the abstract timeline the behaviours are written against
+DAY_BURSTINESS = 0.5            # spread of the per-day activity level (0 = every day identical)
 
 OUTPUT_DIR = "dataset"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "synthetic_bitcoin_transactions.csv")
@@ -85,9 +98,44 @@ _hour_p = np.array([1, 1, 1, 1, 1, 2, 3, 5, 7, 8, 8, 8, 8, 8, 8, 8, 7, 7, 6, 5, 
 _hour_p /= _hour_p.sum()
 
 
-def random_time(day_from=0, day_to=364):
-    """Random realistic timestamp between two day numbers of the year."""
-    day = int(rng.integers(day_from, day_to + 1))
+def _build_day_map():
+    """
+    Map each abstract timeline slot (0..364) to a calendar day in [START, END].
+
+    Each calendar day gets an activity level: a random burstiness factor, rescaled so the days of a
+    month add up to that month's MONTH_SHARE. Slots are then placed by quantile, so a slot's relative
+    position in the year (early / mid / late) is kept, while the number of transfers per month follows
+    MONTH_SHARE and individual days are busier or quieter. A separate random generator is used, so the
+    main generator's random draws (wallets, amounts, behaviours) are exactly what they were before.
+    """
+    day_rng = np.random.default_rng(SEED + 1)
+    days = [START + timedelta(days=i) for i in range(N_DAYS)]
+    level = np.exp(day_rng.normal(0.0, DAY_BURSTINESS, N_DAYS))
+    density = np.zeros(N_DAYS)
+    for key, share in MONTH_SHARE.items():
+        idx = [i for i, d in enumerate(days) if (d.year, d.month) == key]
+        density[idx] = share * level[idx] / level[idx].sum()
+    assert abs(sum(MONTH_SHARE.values()) - 100) < 1e-9 and (density > 0).all()
+    cumulative = np.cumsum(density) / density.sum()
+    jitter = day_rng.random(TIMELINE_SLOTS * 64)            # position inside a slot, drawn once
+    return cumulative, jitter
+
+
+_day_cumulative, _slot_jitter = _build_day_map()
+_jitter_pos = [0]
+
+
+def slot_to_day(slot):
+    """Calendar day index (0 = START) for a timeline slot."""
+    j = _slot_jitter[_jitter_pos[0] % len(_slot_jitter)]
+    _jitter_pos[0] += 1
+    u = (slot + j) / TIMELINE_SLOTS
+    return int(min(np.searchsorted(_day_cumulative, u, side="left"), N_DAYS - 1))
+
+
+def random_time(day_from=0, day_to=TIMELINE_SLOTS - 1):
+    """Random realistic timestamp between two timeline slots (day numbers of the year)."""
+    day = slot_to_day(int(rng.integers(day_from, day_to + 1)))
     hour = int(rng.choice(24, p=_hour_p))
     return START + timedelta(days=day, hours=hour,
                              minutes=int(rng.integers(0, 60)), seconds=int(rng.integers(0, 60)))
@@ -149,7 +197,7 @@ def gen_dormant_activation(n_wallets=12):
                 add_transfer(t, d, other_wallet(d), base * rng.lognormal(0, 0.3), "normal")
             else:
                 add_transfer(t, other_wallet(d), d, base * rng.lognormal(0, 0.3), "normal")
-        t = random_time(315, 330)                             # wakes up in mid/late November
+        t = random_time(315, 330)                             # wakes up ~9 months later (late in the period)
         for _ in range(int(rng.integers(6, 9))):
             t += timedelta(minutes=float(rng.uniform(5, 120)))
             add_transfer(t, d, other_wallet(d), base * rng.uniform(8, 25), "dormant_activation")
@@ -362,6 +410,10 @@ def validate(path):
 
     ts = pd.to_datetime(d["timestamp"])
     print(f"Timestamps sorted             : {ts.is_monotonic_increasing}  ({ts.min()} -> {ts.max()})")
+    within = (ts >= pd.Timestamp(START)).all() and (ts <= pd.Timestamp(END)).all()
+    print(f"Within {START.date()} .. {END.date()} : {bool(within)}")
+    per_month = ts.dt.to_period("M").value_counts().sort_index() / len(ts)
+    print("Rows per month               : " + ", ".join(f"{m} {v:.1%}" for m, v in per_month.items()))
 
     fmt = d["wallet_address"].str.match(r"^wallet_\d+$").all() and d["counterparty_wallet"].str.match(r"^wallet_\d+$").all()
     print(f"Wallet id format ok           : {bool(fmt)}")

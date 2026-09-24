@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bitcoin Transaction Intelligence</title>
+    <link rel="icon" href="data:," />
+    <script>
+      // Apply the stored/system theme before first paint so there is no flash.
+      (function () {
+        var t = 'light';
+        try {
+          var s = localStorage.getItem('sih146.theme');
+          if (s === 'light' || s === 'dark') t = s;
+          else if (window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
