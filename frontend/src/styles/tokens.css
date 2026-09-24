@@ -1,0 +1,90 @@
+/*
+  Design tokens. Each theme is authored on its own (not derived from the other): surfaces, text,
+  borders, status and data-viz colours are defined separately for light and dark. Components,
+  charts and the React Flow graph only reference these variables.
+*/
+
+:root {
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --radius: 4px;
+  --sidebar-w: 236px;
+}
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9; /* table header, inset areas */
+  --sidebar-bg: #eceef2;
+
+  --border: #dde0e6;
+  --border-strong: #c4c9d2;
+  --grid: #e8eaee;
+  --hover: rgba(20, 40, 80, 0.045);
+
+  --text: #1a1f27;
+  --text-2: #464f5c;
+  --text-3: #66707e;
+
+  --accent: #1d5c9c;
+  --accent-hover: #174d84;
+  --accent-contrast: #ffffff;
+  --accent-soft: #e5edf6;
+  --focus: #1d5c9c;
+
+  /* review status */
+  --st-unreviewed: #8a93a0;
+  --st-review: #b7791f;
+  --st-review-text: #8a5a0b;
+  --st-case: #1d5c9c;
+
+  /* anomaly / flag (text uses --flag-text so it stays readable; marks use --viz-flag) */
+  --flag-text: #b5431b;
+  --viz-flag: #e8622f;
+  --viz-neutral: #b6bdc9;
+
+  --graph-edge: #7f8998;
+  --graph-node-bg: #ffffff;
+  --shadow-modal: 0 12px 40px rgba(15, 25, 45, 0.22);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #14171c;
+  --surface: #1b1f26;
+  --surface-2: #21262e;
+  --sidebar-bg: #101317;
+
+  --border: #2c323c;
+  --border-strong: #3c4451;
+  --grid: #292f38;
+  --hover: rgba(255, 255, 255, 0.05);
+
+  --text: #e5e8ed;
+  --text-2: #aeb6c2;
+  --text-3: #8992a0;
+
+  --accent: #6ba6e2;
+  --accent-hover: #86b7ea;
+  --accent-contrast: #0c1724;
+  --accent-soft: #1e2a3a;
+  --focus: #6ba6e2;
+
+  --st-unreviewed: #7b8494;
+  --st-review: #d9a63f;
+  --st-review-text: #e0b352;
+  --st-case: #6ba6e2;
+
+  --flag-text: #f0895c;
+  --viz-flag: #e0642f;
+  --viz-neutral: #566173;
+
+  --graph-edge: #778294;
+  --graph-node-bg: #1b1f26;
+  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
