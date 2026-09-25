@@ -13,7 +13,7 @@ from backend.models import FEATURE_COLUMNS, Base, Transaction, Wallet
 
 EXPECTED_TABLES = {
     "transactions", "wallets", "network_observations", "analysis_runs", "wallet_features", "anomaly_results", "fusion_results",
-    "forensic_findings", "investigative_leads", "entity_clusters", "entity_cluster_members", "cases", "case_items",
+    "forensic_findings", "investigative_leads", "entity_clusters", "entity_cluster_members", "wallet_reviews", "cases", "case_items",
     "case_history",
 }
 

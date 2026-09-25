@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..analysis.clustering import METHOD_LABELS, METHOD_NET, NOTE
 from ..models import EntityCluster, EntityClusterMember, Transaction
 from ..schemas import ClusterDetail, ClusterOut, ClusterRelationship, ClusterWallet
+from . import case_links
 from . import graph as graph_service
 
 
@@ -70,4 +71,4 @@ def get_cluster_detail(session: Session, cluster_id: str) -> ClusterDetail | Non
         focus_type="cluster", focus_id=cluster_id, depth=0, node_types=node_types, max_nodes=200))
     return ClusterDetail(
         **_cluster_out(c).model_dump(), wallets=wallet_rows, devices=by_type("device"), ip_addresses=by_type("ip"), sessions=by_type("session"),
-        internal_relationships=relationships, graph=graph, note=NOTE)
+        internal_relationships=relationships, graph=graph, case_ids=case_links.case_ids_for_cluster(session, cluster_id), note=NOTE)

@@ -142,6 +142,8 @@ class OverviewOut(BaseModel):
     leads_total: int | None = None
     network_observations_total: int = 0        # SYNTHETIC observations
     clusters_total: int = 0
+    cases_total: int = 0
+    active_cases: int = 0                      # cases that are not Closed
 
 
 class ErrorBody(BaseModel):
@@ -211,7 +213,9 @@ class LeadOut(BaseModel):
     first_flagged_at: UtcDatetime | None
     updated_at: UtcDatetime
     run_id: int
-    is_case: bool = False            # a lead is not a case; becomes true only when an investigator opens one (checkpoint 5)
+    is_case: bool = False            # a lead is not a case; true only when an investigator has added it to a case
+    case_ids: list[str] = Field(default_factory=list)
+    review_status: str = "Unreviewed"    # Unreviewed / Under Review (investigator marker) / Case Created (derived)
 
 
 class LeadPage(BaseModel):
@@ -255,6 +259,8 @@ class WalletAnalysis(BaseModel):
     priority_rank: int | None = None
     priority_level: str | None = None
     is_lead: bool = False
+    case_ids: list[str] = Field(default_factory=list)
+    review_status: str = "Unreviewed"
     findings: list[FindingOut] = Field(default_factory=list)
     features: dict[str, float] = Field(default_factory=dict)
     fusion_note: str
@@ -393,4 +399,148 @@ class ClusterDetail(ClusterOut):
     sessions: list[str]
     internal_relationships: list[ClusterRelationship]
     graph: GraphOut
+    case_ids: list[str] = Field(default_factory=list)
     note: str
+
+
+# ---- cases ---------------------------------------------------------------------------------------------------
+from typing import Literal  # noqa: E402
+
+CaseStatus = Literal["Open", "Under investigation", "Closed"]
+CasePriority = Literal["High", "Medium", "Low"]
+ItemType = Literal["lead", "wallet", "transaction", "cluster"]
+CASE_DISCLAIMER = ("A case records an investigator's decision to review something formally. It does not establish that any wrongdoing "
+                   "occurred; the evidence in it is behavioural and statistical and requires investigator judgement.")
+
+
+class CaseItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: ItemType
+    id: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class CaseCreate(BaseModel):
+    """Creating a case is always an explicit investigator action; nothing creates one automatically."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    priority: CasePriority | None = None
+    assigned_to: str | None = Field(default=None, max_length=80)
+    items: list[CaseItemIn] = Field(default_factory=list, max_length=50)
+    note: str | None = Field(default=None, max_length=5000)
+
+
+class CaseUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    status: CaseStatus | None = None
+    priority: CasePriority | None = None
+    assigned_to: str | None = Field(default=None, max_length=80)
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "CaseUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Give at least one field to change.")
+        if "title" in self.model_fields_set and self.title is None:
+            raise ValueError("title cannot be empty.")
+        if "status" in self.model_fields_set and self.status is None:
+            raise ValueError("status cannot be empty.")
+        return self
+
+
+class NoteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=5000)
+
+
+class ReviewedIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    item_type: ItemType
+    item_id: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class CaseHistoryOut(BaseModel):
+    entry_id: int
+    at: UtcDatetime
+    actor: str
+    action: str
+    detail: str | None
+
+
+class CaseItemOut(BaseModel):
+    item_type: str
+    item_id: str
+    added_at: UtcDatetime
+    evidence_snapshot: dict | None            # the evidence as it stood when the item was added
+    current: dict | None = None               # today's values, so any change since then is visible
+
+
+class CaseSummary(BaseModel):
+    case_id: str
+    title: str
+    status: str
+    priority: str | None
+    assigned_to: str | None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+    item_counts: dict[str, int]
+
+
+class CasePage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[CaseSummary]
+
+
+class CaseDetail(CaseSummary):
+    description: str | None
+    items: list[CaseItemOut]
+    history: list[CaseHistoryOut]
+    notes: list[CaseHistoryOut]
+    wallets: list[str]
+    related_transactions: dict
+    disclaimer: str = CASE_DISCLAIMER
+
+
+class ReviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["Unreviewed", "Under Review"]
+
+
+class ReviewOut(BaseModel):
+    wallet_address: str
+    status: str
+    case_ids: list[str]
+
+
+# ---- search --------------------------------------------------------------------------------------------------
+class SearchHit(BaseModel):
+    type: str
+    id: str
+    label: str
+    subtitle: str | None = None
+    match: str                              # what matched, e.g. "wallet address", "member wallet"
+    data: dict = Field(default_factory=dict)
+
+
+class SearchCategory(BaseModel):
+    total: int
+    items: list[SearchHit]
+
+
+class SearchOut(BaseModel):
+    query: str
+    total: int
+    categories: dict[str, SearchCategory]
+    notes: list[str]

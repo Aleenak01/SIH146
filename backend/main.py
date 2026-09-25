@@ -16,7 +16,7 @@ from . import __version__
 from .config import Settings, load_settings
 from .database import Database
 from .errors import install_error_handlers
-from .routers import analysis, clusters, graph, health, imports, leads, monitor as monitor_router, network, transactions, wallets
+from .routers import analysis, cases, clusters, graph, health, imports, leads, monitor as monitor_router, network, search, transactions, wallets
 from .services.monitor import Monitor
 
 
@@ -46,7 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
     install_error_handlers(app)
-    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph):
+    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search):
         app.include_router(module.router)
     return app
 

@@ -50,6 +50,7 @@ class GraphRequest:
     max_nodes: int = 150
     max_transactions: int = 150
     lead_limit: int = 20
+    seeds: list[str] | None = None      # focus_type 'wallets': an explicit wallet list (used for a case)
 
 
 def parse_csv_param(value: str | None, allowed: tuple[str, ...], name: str) -> set[str] | None:
@@ -83,6 +84,8 @@ def build_graph(session: Session, req: GraphRequest) -> GraphOut:
             EntityClusterMember.cluster_id == req.focus_id, EntityClusterMember.entity_type == "wallet")))
         if not seeds:
             raise AppError(404, "not_found", f"No cluster {req.focus_id!r}.")
+    elif req.focus_type == "wallets":
+        seeds = list(req.seeds or [])
     elif req.focus_type == "leads":
         seeds = list(session.scalars(select(InvestigativeLead.wallet_address).order_by(InvestigativeLead.priority_rank).limit(req.lead_limit)))
     else:
@@ -127,7 +130,7 @@ def build_graph(session: Session, req: GraphRequest) -> GraphOut:
     for w in wallets:
         i = info.get(w, {})
         nodes[f"wallet:{w}"] = GraphNodeOut(id=f"wallet:{w}", type="wallet", label=w, data={
-            "address": w, "is_focus": w in seeds and req.focus_type == "wallet", **i})
+            "address": w, "is_focus": w in seeds and req.focus_type in ("wallet", "wallets"), **i})
 
     # ---- 4. transfers between the included wallets --------------------------------------------------------------------
     tx_rows = list(session.execute(select(Transaction).where(Transaction.sender_wallet.in_(wallet_set), Transaction.receiver_wallet.in_(wallet_set))
@@ -229,7 +232,7 @@ def build_graph(session: Session, req: GraphRequest) -> GraphOut:
 
     node_list = list(nodes.values())
     return GraphOut(
-        focus={"type": req.focus_type, "id": req.focus_id}, nodes=node_list, edges=list(edges.values()), truncated=truncated,
+        focus={"type": "case" if req.focus_type == "wallets" else req.focus_type, "id": req.focus_id}, nodes=node_list, edges=list(edges.values()), truncated=truncated,
         omitted=dict(omitted),
         counts={"nodes": dict(Counter(n.type for n in node_list)), "edges": dict(Counter(e.type for e in edges.values()))},
         notes=[SYNTHETIC_NETWORK_NOTE, "Bitcoin transactions do not contain IP addresses, device identifiers or locations; those come from a separate observation source.",

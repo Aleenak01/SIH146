@@ -5,7 +5,7 @@ Populated so far: `wallets`, `transactions` (Checkpoint 2); `analysis_runs`, `wa
 `fusion_results`, `forensic_findings`, `investigative_leads` (Checkpoint 3).
 Defined now, filled by later checkpoints (schema only until then): `network_observations`,
 `analysis_runs`, `wallet_features`, `anomaly_results`, `fusion_results`, `forensic_findings`, `investigative_leads`,
-`entity_clusters`, `entity_cluster_members`, `cases`, `case_items`, `case_history`.
+`entity_clusters`, `entity_cluster_members` (Checkpoint 4); `wallet_reviews`, `cases`, `case_items`, `case_history` (Checkpoint 5).
 
 Every transaction and wallet carries a `source` ('synthetic' or 'real_bitcoin') so the two are never
 mixed silently. All timestamps are naive UTC.
@@ -261,6 +261,19 @@ class EntityClusterMember(Base):
 # --------------------------------------------------------------------------------------------
 # Cases (created only by an investigator)
 # --------------------------------------------------------------------------------------------
+class WalletReview(Base):
+    """
+    An investigator marked a wallet 'Under Review'. (Absent = Unreviewed. 'Case Created' is not stored: it is derived from
+    the wallet being an item of a case.) Purely a workflow marker; it never changes any analysis result.
+    """
+
+    __tablename__ = "wallet_reviews"
+
+    wallet_address: Mapped[str] = mapped_column(ForeignKey("wallets.address"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="Under Review")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Case(Base):
     __tablename__ = "cases"
 
