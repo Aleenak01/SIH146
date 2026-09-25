@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from .. import __version__
 from ..deps import get_session
 from ..analysis.service import analysis_is_stale, latest_run
-from ..models import AnomalyResult, InvestigativeLead, Transaction, Wallet
+from ..models import AnomalyResult, EntityCluster, InvestigativeLead, NetworkObservation, Transaction, Wallet
 from ..schemas import OverviewOut
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -37,6 +37,8 @@ def overview(session: Session = Depends(get_session)):
     return OverviewOut(
         last_analysis_at=run.finished_at if run else None, analysis_stale=analysis_is_stale(session, "synthetic"),
         anomalous_wallets=anomalous, leads_total=leads,
+        network_observations_total=session.scalar(select(func.count()).select_from(NetworkObservation)) or 0,
+        clusters_total=session.scalar(select(func.count()).select_from(EntityCluster)) or 0,
         transactions_total=sum(v["transactions"] for v in by_source.values()),
         wallets_total=sum(v["wallets"] for v in by_source.values()),
         by_source=by_source, first_transaction_at=first, last_transaction_at=last,

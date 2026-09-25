@@ -140,6 +140,8 @@ class OverviewOut(BaseModel):
     analysis_stale: bool = False
     anomalous_wallets: int | None = None
     leads_total: int | None = None
+    network_observations_total: int = 0        # SYNTHETIC observations
+    clusters_total: int = 0
 
 
 class ErrorBody(BaseModel):
@@ -180,6 +182,8 @@ class RunSummaryOut(BaseModel):
     new_leads: int
     duration_seconds: float
     error: str | None = None
+    clusters_total: int = 0
+    cluster_error: str | None = None
 
 
 class FindingOut(BaseModel):
@@ -254,3 +258,139 @@ class WalletAnalysis(BaseModel):
     findings: list[FindingOut] = Field(default_factory=list)
     features: dict[str, float] = Field(default_factory=dict)
     fusion_note: str
+
+
+# ---- network observations, clusters, graph -----------------------------------------------------------------
+SYNTHETIC_NETWORK_NOTE = ("Synthetic network observation: demo data generated for the prototype (documentation IP ranges only). "
+                          "It is not derived from the Bitcoin blockchain and does not identify any real person or device.")
+
+
+class ObservationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    observation_id: str
+    transaction_id: str | None
+    wallet_address: str
+    observed_party: str | None = None          # 'sender' or 'receiver' (from the observation id)
+    ip_address: str | None
+    device_id: str | None
+    user_agent: str | None
+    network_type: str | None
+    session_id: str | None
+    geo_region: str | None
+    observed_at: UtcDatetime | None
+    origin: str
+    is_synthetic: bool
+    label: str = "Synthetic network observation"
+
+
+class ObservationPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    note: str = SYNTHETIC_NETWORK_NOTE
+    items: list[ObservationOut]
+
+
+class EntityDetail(BaseModel):
+    entity_type: str
+    entity_id: str
+    observation_count: int
+    wallets: list[str]
+    transactions: int
+    related: dict[str, list[str]]
+    first_observed_at: UtcDatetime | None
+    last_observed_at: UtcDatetime | None
+    note: str = SYNTHETIC_NETWORK_NOTE
+
+
+class NetworkImportOut(BaseModel):
+    file: str
+    rows_in_file: int
+    inserted: int
+    skipped_existing: int
+    rejected: list[dict]
+    observations_total: int
+    clusters_total: int = 0
+    generated: bool = False
+    note: str = SYNTHETIC_NETWORK_NOTE
+
+
+class NetworkImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generate: bool = False        # (re)generate the CSV from the imported transactions first
+    replace: bool = False
+
+
+class GraphNodeOut(BaseModel):
+    id: str
+    type: str
+    label: str
+    data: dict = Field(default_factory=dict)
+
+
+class GraphEdgeOut(BaseModel):
+    id: str
+    source: str
+    target: str
+    type: str
+    data: dict = Field(default_factory=dict)
+
+
+class GraphOut(BaseModel):
+    focus: dict
+    nodes: list[GraphNodeOut]
+    edges: list[GraphEdgeOut]
+    truncated: bool = False
+    omitted: dict[str, int] = Field(default_factory=dict)
+    counts: dict[str, dict[str, int]]
+    notes: list[str]
+
+
+class ClusterOut(BaseModel):
+    cluster_id: str
+    method: str
+    method_label: str
+    source: str
+    entity_count: int
+    wallet_count: int
+    transaction_count: int
+    network_observation_count: int
+    priority_summary: dict | None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+
+
+class ClusterPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[ClusterOut]
+
+
+class ClusterWallet(BaseModel):
+    wallet_address: str
+    is_lead: bool
+    ml_prediction: str | None = None
+    priority_level: str | None = None
+    priority_rank: int | None = None
+    combined_score: float | None = None
+    transaction_count: int
+
+
+class ClusterRelationship(BaseModel):
+    source: str
+    target: str
+    transfers: int
+    total_btc: float
+
+
+class ClusterDetail(ClusterOut):
+    wallets: list[ClusterWallet]
+    devices: list[str]
+    ip_addresses: list[str]
+    sessions: list[str]
+    internal_relationships: list[ClusterRelationship]
+    graph: GraphOut
+    note: str

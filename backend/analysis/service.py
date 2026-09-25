@@ -50,6 +50,8 @@ class RunSummary:
     new_leads: int
     duration_seconds: float
     error: str | None = None
+    clusters_total: int = 0
+    cluster_error: str | None = None      # clustering failing never fails the analysis; it is reported here
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -93,6 +95,7 @@ def run_analysis(db: Database, source: str = "synthetic", trigger: str = "manual
             out = run_pipeline(transfers)                       # the heavy part; no database locks are held
             with WRITE_LOCK, db.transaction() as s:
                 summary = _persist(s, run_id, source, trigger, transfers, out, started)
+            _refresh_clusters(db, source, summary)
             return summary
         except Exception as e:
             with db.transaction() as s:
@@ -101,6 +104,16 @@ def run_analysis(db: Database, source: str = "synthetic", trigger: str = "manual
             raise
     finally:
         ANALYSIS_LOCK.release()
+
+
+def _refresh_clusters(db: Database, source: str, summary: RunSummary) -> None:
+    """Update related-entity clusters (and their priority summaries) after an analysis run."""
+    from .clustering import refresh_clusters
+
+    try:
+        summary.clusters_total = refresh_clusters(db, source).total
+    except Exception as e:                               # the analysis itself already succeeded and is committed
+        summary.cluster_error = f"{type(e).__name__}: {e}"[:300]
 
 
 def _persist(s, run_id: int, source: str, trigger: str, transfers, out, started: float) -> RunSummary:

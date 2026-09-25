@@ -63,8 +63,14 @@ def _chunks(seq: Sequence, size: int = _CHUNK):
         yield seq[i : i + size]
 
 
-def ingest(session: Session, items: Sequence[SourcedTransaction], source: str) -> IngestOutcome:
-    """Persist already-validated transactions. Commits are left to the caller."""
+def ingest(session: Session, items: Sequence[SourcedTransaction], source: str, observe: bool = True) -> IngestOutcome:
+    """
+    Persist already-validated transactions. Commits are left to the caller.
+
+    observe: for SYNTHETIC transactions, also create synthetic network observations for them (continuing each wallet's
+    device). The CSV importer passes False because the observation dataset is generated and imported separately;
+    real_bitcoin transactions never get synthetic observations.
+    """
     if source not in SOURCES:
         raise ValueError(f"Unknown source {source!r}")
 
@@ -151,6 +157,10 @@ def ingest(session: Session, items: Sequence[SourcedTransaction], source: str) -
         if rows:
             session.execute(insert(Transaction), rows)
         session.flush()
+        if observe and source == "synthetic" and rows:
+            from .network import observe_new_transactions
+
+            observe_new_transactions(session, rows)
 
         outcome.inserted = len(rows)
         outcome.transaction_ids = [r["transaction_id"] for r in rows]

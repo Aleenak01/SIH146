@@ -44,6 +44,8 @@ class Settings:
     inbox_dir: Path = PROJECT_ROOT / "data" / "stream_inbox"
     stream_seed: int = 146                     # seed for the synthetic stream, so a demo is reproducible
     stream_rate_per_minute: float = 30.0
+    network_csv: Path = PROJECT_ROOT / "data" / "synthetic_network_observations.csv"   # SYNTHETIC network observations
+    network_seed: int = 148
 
     @property
     def database_url(self) -> str:
@@ -64,4 +66,6 @@ def load_settings() -> Settings:
         inbox_dir=_resolve(env("SIH146_INBOX_DIR", "data/stream_inbox")),
         stream_seed=int(env("SIH146_STREAM_SEED", "146")),
         stream_rate_per_minute=float(env("SIH146_STREAM_RATE_PER_MINUTE", "30")),
+        network_csv=_resolve(env("SIH146_NETWORK_CSV", "data/synthetic_network_observations.csv")),
+        network_seed=int(env("SIH146_NETWORK_SEED", "148")),
     )

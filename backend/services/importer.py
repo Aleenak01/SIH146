@@ -52,7 +52,7 @@ def import_synthetic_csv(db: Database, path: Path, replace: bool = False) -> Imp
                         "imported; re-run with replace=true to replace all synthetic data."
                     )
 
-        outcome = ingest(session, items, "synthetic")
+        outcome = ingest(session, items, "synthetic", observe=False)     # observations are generated/imported separately
         if outcome.rejected:
             raise ImportConflict(f"{len(outcome.rejected)} transactions were refused, e.g. {outcome.rejected[0]['error']}")
         wallets_total = session.scalar(select(func.count()).select_from(Wallet).where(Wallet.source == "synthetic")) or 0

@@ -52,6 +52,7 @@ def settings(tmp_path) -> Settings:
         monitor_autostart=False,                  # tests drive the monitor explicitly
         monitor_interval=1.0,
         inbox_dir=tmp_path / "inbox",
+        network_csv=tmp_path / "network_obs.csv",      # never the real data/ file
     )
 
 
@@ -111,7 +112,7 @@ def seed_population(db: Database, n_wallets: int = 60, n_transfers: int = 700, s
         a, b = rng.sample(wallets, 2)
         add(a, b)
     if hub:
-        for w in rng.sample(wallets[1:], 45):
+        for w in rng.sample(wallets[1:], min(45, len(wallets) - 1)):
             for _ in range(rng.randint(1, 3)):
                 add(w, wallets[0], rng.uniform(0.5, 3))              # wallets[0] is the hub
     with db.transaction() as s:
@@ -135,6 +136,31 @@ def analysed_db(population_db) -> Database:
 
 
 @pytest.fixture
+def networked_db(population_db, tmp_path) -> Database:
+    """The small population with the batch-generated (deterministic) synthetic network dataset: some wallets share devices."""
+    from backend.services import network as ns
+
+    path = tmp_path / "obs.csv"
+    ns.generate_csv(population_db, path)
+    ns.import_csv(population_db, path, replace=True)
+    return population_db
+
+
+@pytest.fixture
+def networked_analysed_db(networked_db) -> Database:
+    from backend.analysis.service import run_analysis
+
+    run_analysis(networked_db)
+    return networked_db
+
+
+@pytest.fixture
+def networked_client(settings, networked_analysed_db) -> TestClient:
+    with TestClient(create_app(settings)) as c:
+        yield c
+
+
+@pytest.fixture
 def analysed_client(settings, analysed_db) -> TestClient:
     with TestClient(create_app(settings)) as c:
         yield c
@@ -150,7 +176,12 @@ def real_analysed_template(tmp_path_factory, project_root):
     database = Database(f"sqlite:///{path.as_posix()}")
     database.init_db()
     import_synthetic_csv(database, project_root / "dataset" / "synthetic_bitcoin_transactions.csv")
-    summary = run_analysis(database)
+    from backend.services import network as ns
+
+    obs_csv = path.parent / "obs.csv"
+    ns.generate_csv(database, obs_csv)
+    ns.import_csv(database, obs_csv)
+    summary = run_analysis(database)             # also refreshes the clusters
     database.dispose()
     return path, summary
 
