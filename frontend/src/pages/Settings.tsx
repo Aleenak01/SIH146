@@ -1,13 +1,15 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import pipeline from 'virtual:pipeline-info';
 import { Download } from 'lucide-react';
+import { api } from '../api/client';
+import type { CaseDetail, SettingsView } from '../api/types';
 import { PageHeader, Panel } from '../components/bits';
 import { WALLET_COLUMNS, downloadCsv, downloadJson, stamp, walletRows, TRANSFER_COLUMNS, transferRows } from '../data/export';
 import { TOTAL_RULES } from '../data/rules';
 import { fmtDateTime, fmtDate, fmtInt, fmtPct, fmtScore } from '../format';
 import { useCases } from '../state/cases';
 import { useConfirm } from '../state/confirm';
-import { useDataset, useTransfers } from '../state/data';
+import { useBackend, useDataset, useTransfers } from '../state/data';
 import { useSettings } from '../state/settings';
 import { useTheme, type ThemePreference } from '../state/theme';
 
@@ -18,8 +20,9 @@ export function Settings() {
     <div className="page">
       <PageHeader
         title="Settings"
-        subtitle="Preferences for this browser, and a description of the local prototype configuration. Nothing here changes the analysis pipeline."
+        subtitle="Monitoring and data-source settings (saved in the local backend), preferences for this browser, and a description of the local prototype configuration. Nothing here changes the analysis models or rules."
       />
+      <DataSource />
       <Appearance />
       <Confirmations />
       <Configuration />
@@ -88,6 +91,7 @@ function Confirmations() {
 function Configuration() {
   const { wallets, mlBoundary, population } = useDataset();
   const { transfers } = useTransfers();
+  const backend = useBackend();
   const m = pipeline.model;
 
   const s = useMemo(() => {
@@ -134,6 +138,7 @@ function Configuration() {
         </KV>
         <KV group="Data">
           <Row label="Dataset type" value="Synthetic Bitcoin transaction and network metadata. Not real blockchain data." />
+          <Row label="Loaded from" value={backend.mode === 'api' ? `Local backend database (SQLite)${backend.analysis?.runId ? `, analysis run #${backend.analysis.runId}` : ''}` : 'Pipeline CSV files bundled with the app (backend not connected)'} />
           <Row label="Wallets analysed" value={fmtInt(wallets.length)} />
           <Row label="Transaction records" value={`${fmtInt(s.records)} (${fmtInt(s.transfers)} distinct transfers; each appears once per party)`} />
           <Row label="Transaction period" value={period} />
@@ -234,8 +239,8 @@ function ExportData() {
   const { statusOf, cases } = useCases();
   const { guard } = useConfirm();
 
-  const run = async (title: string, body: string, label: string, action: () => void) => {
-    if (await guard('confirmExport', { title, body, confirmLabel: label })) action();
+  const run = async (title: string, body: string, label: string, action: () => void | Promise<void>) => {
+    if (await guard('confirmExport', { title, body, confirmLabel: label })) await action();
   };
 
   const items: { name: string; detail: string; format: string; disabled?: boolean; onClick: () => void }[] = [
@@ -274,13 +279,14 @@ function ExportData() {
     },
     {
       name: 'Cases',
-      detail: `${fmtInt(cases.length)} case${cases.length === 1 ? '' : 's'} with wallets, evidence snapshots, related transactions, notes and history.`,
+      detail: `${fmtInt(cases.length)} case${cases.length === 1 ? '' : 's'} from the backend, with items, evidence saved at the time, notes and history.`,
       format: 'JSON',
       disabled: cases.length === 0,
       onClick: () =>
-        run('Export cases', `Save ${fmtInt(cases.length)} case(s) as a JSON file on this computer.`, 'Export JSON', () =>
-          downloadJson(`sih146-cases-${stamp()}.json`, { exportedAt: new Date().toISOString(), source: 'SIH146 frontend prototype, synthetic data', cases }),
-        ),
+        run('Export cases', `Save ${fmtInt(cases.length)} case(s) as a JSON file on this computer.`, 'Export JSON', async () => {
+          const details = await Promise.all(cases.map((c) => api.get<CaseDetail>(`/api/cases/${c.case_id}`)));
+          downloadJson(`sih146-cases-${stamp()}.json`, { exportedAt: new Date().toISOString(), source: 'SIH146 local backend, synthetic data', cases: details });
+        }),
     },
   ];
 
@@ -304,67 +310,150 @@ function ExportData() {
           </tbody>
         </table>
       </div>
-      <p className="graph-foot">
-        Full investigation backup (cases and review statuses) is under Local investigation data below.
-      </p>
     </Panel>
   );
 }
 
 // -------------------------------------------------------------------------------------------
 function LocalData() {
-  const { cases, snapshot, clearAll } = useCases();
-  const { confirm, guard } = useConfirm();
-  const reviewCount = Object.values(snapshot().reviewStatus).filter((s) => s !== 'Unreviewed').length;
+  const { cases, available } = useCases();
+  const { wallets } = useDataset();
+  const underReview = wallets.filter((w) => w.lead?.review === 'Under Review').length;
+  return (
+    <Panel
+      title="Investigation data"
+      note="Cases, notes, history and wallet review statuses are stored in the backend database (data/sih146.db in the project folder), not in the browser. Cases saved in this browser by earlier prototype versions were test data and are neither shown nor imported."
+    >
+      {available ? (
+        <div className="kv">
+          <dl>
+            <Row label="Cases" value={fmtInt(cases.length)} />
+            <Row label="Wallets marked under review" value={fmtInt(underReview)} />
+            <Row label="Wallets with a case" value={fmtInt(wallets.filter((w) => (w.lead?.caseIds.length ?? 0) > 0).length)} />
+          </dl>
+        </div>
+      ) : (
+        <p className="muted">The backend is not connected, so no investigation data is available.</p>
+      )}
+    </Panel>
+  );
+}
 
-  const backup = async () => {
-    if (
-      await guard('confirmExport', {
-        title: 'Export investigation data',
-        body: 'Save all cases and wallet review statuses as a JSON file on this computer.',
-        confirmLabel: 'Export JSON',
-      })
-    )
-      downloadJson(`sih146-investigation-data-${stamp()}.json`, {
-        exportedAt: new Date().toISOString(),
-        source: 'SIH146 frontend prototype, synthetic data',
-        ...snapshot(),
-      });
-  };
+// -------------------------------------------------------------------------------------------
+/** Data source and monitoring. Saved in the backend, so they survive a restart. No credentials are entered or stored here. */
+function DataSource() {
+  const backend = useBackend();
+  const [view, setView] = useState<SettingsView | null>(null);
+  const [form, setForm] = useState<SettingsView['settings'] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const clear = async () => {
-    const ok = await confirm({
-      title: 'Clear local investigation data',
-      body: (
-        <>
-          This permanently removes <b>{fmtInt(cases.length)}</b> case{cases.length === 1 ? '' : 's'} and <b>{fmtInt(reviewCount)}</b> wallet review status
-          {reviewCount === 1 ? '' : 'es'} from this browser. The pipeline output and transaction data are not affected. Export first if you need a copy.
-        </>
-      ),
-      confirmLabel: 'Clear data',
-      danger: true,
-    });
-    if (ok) clearAll();
+  useEffect(() => {
+    if (backend.mode !== 'api') return;
+    api.get<SettingsView>('/api/settings').then(
+      (v) => {
+        setView(v);
+        setForm(v.settings);
+      },
+      (e) => setError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [backend.mode]);
+
+  if (backend.mode !== 'api') {
+    return (
+      <Panel title="Data source and monitoring" note="Needs the local backend.">
+        <p className="muted">The backend is not connected, so monitoring and data-source settings are unavailable. Start it with “python -m backend”, then use Retry connection.</p>
+      </Panel>
+    );
+  }
+  if (!view || !form) return <Panel title="Data source and monitoring">{error ? <p className="field-error">{error}</p> : <div className="viz-loading">Loading…</div>}</Panel>;
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(view.settings);
+  const set = (patch: Partial<typeof form>) => {
+    setSaved(false);
+    setForm({ ...form, ...patch });
   };
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const v = await api.put<SettingsView>('/api/settings', form);
+      setView(v);
+      setForm(v.settings);
+      setSaved(true);
+      await backend.reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const [minI, maxI] = view.limits.interval_seconds;
+  const [minR, maxR] = view.limits.stream_rate_per_minute;
 
   return (
     <Panel
-      title="Local investigation data"
-      note="Cases, notes, history and wallet review statuses are kept in this browser's local storage, not in the project files. They are not shared with other browsers or devices."
+      title="Data source and monitoring"
+      note="Applied immediately and saved in the local backend. The data is always synthetic demo data; nothing here contacts the Bitcoin network."
     >
       <div className="kv">
         <dl>
-          <Row label="Cases" value={fmtInt(cases.length)} />
-          <Row label="Wallets marked under review or with a case" value={fmtInt(reviewCount + cases.reduce((n, c) => n + c.wallets.length, 0))} />
+          <Row label="Data mode" value={`${view.data_source.label} — synthetic demo data`} />
+          <Row label="Real Bitcoin data" value={view.data_source.real_bitcoin.note} />
+          <Row label="Credentials" value={view.secrets_note} />
         </dl>
       </div>
+      <div className="option-list">
+        <label className="option">
+          <input type="checkbox" checked={form.monitor_enabled} onChange={(e) => set({ monitor_enabled: e.target.checked })} />
+          <span>
+            <b>Monitoring enabled</b>
+            <em>Watches the inbox folder and the synthetic stream, and re-analyses when new transactions arrive.</em>
+          </span>
+        </label>
+        <label className="option">
+          <input type="checkbox" checked={form.auto_analysis} onChange={(e) => set({ auto_analysis: e.target.checked })} />
+          <span>
+            <b>Automatic analysis</b>
+            <em>Micro-batch: the whole population is re-analysed at each check when new transactions have arrived (features, Isolation Forest, forensic rules, fusion, leads, clusters). Off means analysis only runs on request.</em>
+          </span>
+        </label>
+        <label className="option">
+          <input type="checkbox" checked={form.stream_enabled} onChange={(e) => set({ stream_enabled: e.target.checked })} />
+          <span>
+            <b>Synthetic transaction stream</b>
+            <em>Generates new synthetic transactions continuously so monitoring can be demonstrated. Labelled synthetic everywhere.</em>
+          </span>
+        </label>
+      </div>
+      <div className="field-row">
+        <label className="field">
+          <span>
+            Check interval (seconds, {minI}–{maxI})
+          </span>
+          <input type="number" min={minI} max={maxI} step="1" value={form.interval_seconds} onChange={(e) => set({ interval_seconds: Number(e.target.value) })} />
+        </label>
+        <label className="field">
+          <span>
+            Stream rate (transactions per minute, {minR}–{maxR})
+          </span>
+          <input type="number" min={minR} max={maxR} step="1" value={form.stream_rate_per_minute} disabled={!form.stream_enabled} onChange={(e) => set({ stream_rate_per_minute: Number(e.target.value) })} />
+        </label>
+      </div>
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
       <p className="settings-actions">
-        <button type="button" className="btn btn-sm" onClick={backup} disabled={cases.length === 0 && reviewCount === 0}>
-          <Download size={13} aria-hidden="true" /> Export investigation data (JSON)
+        <button type="button" className="btn btn-sm btn-primary" onClick={() => void save()} disabled={!dirty || busy}>
+          {busy ? 'Saving…' : 'Apply and save'}
         </button>
-        <button type="button" className="btn btn-sm btn-danger-outline" onClick={clear} disabled={cases.length === 0 && reviewCount === 0}>
-          Clear local data…
+        <button type="button" className="btn btn-sm" onClick={() => set(view.settings)} disabled={!dirty || busy}>
+          Discard changes
         </button>
+        {saved && !dirty && <span className="muted">Saved.</span>}
       </p>
     </Panel>
   );

@@ -6,12 +6,12 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..analysis.fusion import FUSION_LABEL
-from ..analysis.service import latest_run
+from ..analysis.service import analysis_is_stale, latest_run
 from ..models import (
     FEATURE_COLUMNS, AnomalyResult, ForensicFinding, FusionResult, InvestigativeLead, Transaction, Wallet, WalletFeatures,
 )
 from ..schemas import (
-    FindingOut, LeadDetail, LeadOut, RelatedWallet, TransactionOut, TransactionPage, WalletAnalysis,
+    BulkAnalysis, BulkWallet, FindingOut, LeadDetail, LeadOut, RelatedWallet, TransactionOut, TransactionPage, WalletAnalysis,
 )
 from . import case_links, queries
 
@@ -135,3 +135,39 @@ def _unscored(session: Session, wallet: str, reason: str, run_id: int | None) ->
     cases = case_links.case_ids_for_wallets(session, [wallet])
     return WalletAnalysis(wallet_address=wallet, scored=False, unscored_reason=reason, run_id=run_id, fusion_note=FUSION_LABEL,
                           case_ids=cases.get(wallet, []), review_status=case_links.review_status(session, [wallet], cases)[wallet])
+
+
+def bulk_analysis(session: Session, source: str = "synthetic") -> BulkAnalysis:
+    """Latest completed run of one source: every scored wallet with its evidence, features, lead state, cases and review status."""
+    run = latest_run(session, source)
+    if run is None:
+        return BulkAnalysis(run_id=None, source=source, finished_at=None, fusion_note=FUSION_LABEL, scored_wallets=0, unscored_wallets=0, wallets=[])
+    rid = run.run_id
+    fusion = {f.wallet_address: f for f in session.scalars(select(FusionResult).where(FusionResult.run_id == rid))}
+    ml = {a.wallet_address: a for a in session.scalars(select(AnomalyResult).where(AnomalyResult.run_id == rid))}
+    feats = {f.wallet_address: f for f in session.scalars(select(WalletFeatures).where(WalletFeatures.run_id == rid))}
+    findings: dict[str, list[ForensicFinding]] = {}
+    for f in session.scalars(select(ForensicFinding).where(ForensicFinding.run_id == rid).order_by(ForensicFinding.finding_id)):
+        findings.setdefault(f.wallet_address, []).append(f)
+    leads = {l.wallet_address: l for l in session.scalars(select(InvestigativeLead).where(InvestigativeLead.source == source))}
+    wallets = sorted(fusion, key=lambda w: fusion[w].priority_rank)
+    cases = case_links.case_ids_for_wallets(session, wallets)
+    review = case_links.review_status(session, wallets, cases)
+    out = []
+    for w in wallets:
+        fu, a, ft = fusion[w], ml.get(w), feats.get(w)
+        if a is None or ft is None:
+            continue
+        lead = leads.get(w)
+        out.append(BulkWallet(
+            wallet_address=w, ml_score=a.anomaly_score, ml_prediction=a.anomaly_prediction, forensic_score=fu.forensic_score,
+            forensic_rule_count=fu.forensic_rule_count, evidence_level=fu.evidence_level,
+            triggered_rules=[f.rule_id for f in findings.get(w, [])], findings=[f.evidence or "" for f in findings.get(w, [])],
+            combined_score=fu.combined_score, priority_rank=fu.priority_rank, priority_level=fu.priority_level, is_lead=lead is not None,
+            reasons=(lead.contributing_evidence or {}).get("reasons", []) if lead else [], case_ids=cases.get(w, []),
+            review_status=review[w], features={c: getattr(ft, c) for c in FEATURE_COLUMNS}))
+    fusion_cfg = (run.model_config_json or {}).get("fusion", {})
+    return BulkAnalysis(
+        run_id=rid, source=source, finished_at=run.finished_at, stale=analysis_is_stale(session, source),
+        forensic_weight=fusion_cfg.get("forensic_weight"), ml_weight=fusion_cfg.get("ml_weight"), fusion_note=FUSION_LABEL,
+        scored_wallets=len(out), unscored_wallets=(run.wallet_count or 0) - len(out), wallets=out)

@@ -544,3 +544,38 @@ class SearchOut(BaseModel):
     total: int
     categories: dict[str, SearchCategory]
     notes: list[str]
+
+
+# ---------------------------------------------------------------------------------------------
+# Bulk analysis (one call gives the frontend everything it needs to list and chart the whole population)
+# ---------------------------------------------------------------------------------------------
+class BulkWallet(BaseModel):
+    wallet_address: str
+    ml_score: float
+    ml_prediction: str
+    forensic_score: float
+    forensic_rule_count: int
+    evidence_level: str
+    triggered_rules: list[str]                    # rule ids, in the order the pipeline reported them
+    findings: list[str]                           # the rules' own explanation sentences (same order)
+    combined_score: float
+    priority_rank: int
+    priority_level: str
+    is_lead: bool
+    reasons: list[str] = Field(default_factory=list)      # why it is a lead (leads only)
+    case_ids: list[str] = Field(default_factory=list)
+    review_status: str = "Unreviewed"
+    features: dict[str, float]
+
+
+class BulkAnalysis(BaseModel):
+    run_id: int | None
+    source: str
+    finished_at: UtcDatetime | None
+    stale: bool = False
+    forensic_weight: float | None = None
+    ml_weight: float | None = None
+    fusion_note: str
+    scored_wallets: int
+    unscored_wallets: int
+    wallets: list[BulkWallet]

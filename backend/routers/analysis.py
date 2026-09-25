@@ -12,7 +12,8 @@ from ..database import Database
 from ..deps import get_db, get_session
 from ..errors import AppError
 from ..models import AnalysisRun
-from ..schemas import AnalysisRunOut, RunSummaryOut
+from ..schemas import AnalysisRunOut, BulkAnalysis, RunSummaryOut
+from ..services import leads as leads_service
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -47,3 +48,13 @@ def latest(session: Session = Depends(get_session)):
     if run is None:
         raise AppError(404, "not_found", "No analysis has completed yet.")
     return {**_run_out(run).model_dump(mode="json"), "stale": analysis_is_stale(session, "synthetic")}
+
+
+@router.get("/wallets", response_model=BulkAnalysis)
+def all_wallets(session: Session = Depends(get_session)):
+    """
+    The latest analysis of every scored wallet in one response (ML score and prediction, forensic rules and
+    explanations, combined result, priority, lead state, cases, review status and the 18 features). Wallets that
+    could not be scored are not invented; they are counted in `unscored_wallets`.
+    """
+    return leads_service.bulk_analysis(session, "synthetic")

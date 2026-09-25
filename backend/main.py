@@ -16,7 +16,8 @@ from . import __version__
 from .config import Settings, load_settings
 from .database import Database
 from .errors import install_error_handlers
-from .routers import analysis, cases, clusters, graph, health, imports, leads, monitor as monitor_router, network, search, transactions, wallets
+from .routers import analysis, cases, clusters, graph, health, imports, leads, monitor as monitor_router, network, search, settings as settings_router, transactions, wallets
+from .services import app_settings
 from .services.monitor import Monitor
 
 
@@ -28,8 +29,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         db.init_db()                    # additive: creates missing tables only
-        if settings.monitor_autostart:
-            monitor.start()             # inbox watcher + automatic (micro-batch) analysis; synthetic data only
+        app_settings.apply_persisted(db, monitor, settings.monitor_autostart)   # saved choices, else the environment default
         yield
         monitor.stop()
         db.dispose()
@@ -46,7 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
     install_error_handlers(app)
-    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search):
+    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search, settings_router):
         app.include_router(module.router)
     return app
 

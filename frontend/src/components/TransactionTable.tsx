@@ -1,9 +1,11 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight } from 'lucide-react';
+import { api, qs } from '../api/client';
+import type { ObservationPage } from '../api/types';
 import type { Transfer } from '../data/types';
 import { fmtBtc, fmtInt, fmtTs } from '../format';
-import { useTransfers } from '../state/data';
+import { useBackend, useDataset, useTransfers } from '../state/data';
 
 type SortKey = 'time' | 'from' | 'to' | 'amount';
 
@@ -13,12 +15,12 @@ const COLS: { key: SortKey | null; label: string; align?: 'right' }[] = [
   { key: 'to', label: 'Receiver' },
   { key: 'amount', label: 'Amount (BTC)', align: 'right' },
   { key: null, label: 'In / out', align: 'right' },
-  { key: null, label: 'Source row', align: 'right' },
+  { key: null, label: 'Reference', align: 'right' },
 ];
 
 /**
- * Transfers from the synthetic dataset. The raw file has no transaction ID, so rows are identified
- * by their timestamp, parties and source-file row number. Clicking a row opens its full record.
+ * Transfers from the synthetic dataset. Rows from the backend carry a transaction ID (syn-…); rows from the bundled
+ * CSV, which has none, are identified by their timestamp, parties and source-file row number. Clicking a row opens its full record.
  * Used by Transactions / Network and by Case detail.
  */
 export function TransactionTable({
@@ -57,7 +59,7 @@ export function TransactionTable({
   };
 
   // A transfer is identified by its source row where present (older saved cases may lack it).
-  const rowKey = (t: Transfer) => `${t.row ?? 'x'}:${t.ts}:${t.from}:${t.to}`;
+  const rowKey = (t: Transfer) => t.id ?? `${t.row ?? 'x'}:${t.ts}:${t.from}:${t.to}`;
 
   const Wallet = ({ id }: { id: string }) => (
     <Link to={`/wallets/${id}`} className="mono wallet-link" onClick={(e) => e.stopPropagation()} title="Open wallet investigation">
@@ -109,7 +111,7 @@ export function TransactionTable({
                     <td className="num mono">
                       {t.inputCount ?? '—'} / {t.outputCount ?? '—'}
                     </td>
-                    <td className="num mono muted">{t.row ?? '—'}</td>
+                    <td className="num mono muted">{t.id ?? t.row ?? '—'}</td>
                   </tr>
                   {isOpen && (
                     <tr className="detail-row">
@@ -160,6 +162,11 @@ export function TransactionTable({
 /** Every field the dataset holds for this transfer, plus what can be derived from the other transfers. */
 function TransactionDetail({ t, flaggedIds }: { t: Transfer; flaggedIds: Set<string> }) {
   const { transfers } = useTransfers();
+  const { byId } = useDataset();
+  const wl = (id: string) => {
+    const w = byId.get(id);
+    return w?.lead ? ` · priority #${w.priorityRank} (${w.lead.priorityLevel})${w.lead.isLead ? ', lead' : ''}` : '';
+  };
   const pair = useMemo(() => {
     if (!transfers) return null;
     let forward = 0;
@@ -188,6 +195,7 @@ function TransactionDetail({ t, flaggedIds }: { t: Transfer; flaggedIds: Set<str
             {t.from}
           </Link>
           {flaggedIds.has(t.from) ? <span className="muted"> · ML-flagged</span> : null}
+          <span className="muted">{wl(t.from)}</span>
         </dd>
         <dt>Receiver</dt>
         <dd>
@@ -195,6 +203,7 @@ function TransactionDetail({ t, flaggedIds }: { t: Transfer; flaggedIds: Set<str
             {t.to}
           </Link>
           {flaggedIds.has(t.to) ? <span className="muted"> · ML-flagged</span> : null}
+          <span className="muted">{wl(t.to)}</span>
         </dd>
         <dt>Amount</dt>
         <dd className="mono">{fmtBtc(t.amountBtc)} BTC</dd>
@@ -202,8 +211,17 @@ function TransactionDetail({ t, flaggedIds }: { t: Transfer; flaggedIds: Set<str
         <dd className="mono">
           {t.inputCount ?? '—'} inputs · {t.outputCount ?? '—'} outputs
         </dd>
-        <dt>Source row</dt>
-        <dd className="mono">{t.row ?? '—'} in synthetic_bitcoin_transactions.csv (no transaction ID exists in the dataset)</dd>
+        {t.id ? (
+          <>
+            <dt>Transaction ID</dt>
+            <dd className="mono">{t.id} <span className="muted">(surrogate ID assigned on import; the raw dataset has none)</span></dd>
+          </>
+        ) : (
+          <>
+            <dt>Source row</dt>
+            <dd className="mono">{t.row ?? '—'} in synthetic_bitcoin_transactions.csv (no transaction ID exists in the dataset)</dd>
+          </>
+        )}
         <dt>Same pair</dt>
         <dd>
           {pair
@@ -211,6 +229,7 @@ function TransactionDetail({ t, flaggedIds }: { t: Transfer; flaggedIds: Set<str
             : 'Loading…'}
         </dd>
       </dl>
+      {t.id && <ObservationList transactionId={t.id} />}
       <div className="tx-detail-actions">
         <Link className="btn btn-sm" to={`/network?view=transactions&q=${t.from}&with=${t.to}`}>
           All transfers between these wallets
@@ -222,6 +241,60 @@ function TransactionDetail({ t, flaggedIds }: { t: Transfer; flaggedIds: Set<str
           Network of receiver
         </Link>
       </div>
+    </div>
+  );
+}
+
+/** The SYNTHETIC IP / device / session observations attached to one transaction (backend only). */
+function ObservationList({ transactionId }: { transactionId: string }) {
+  const { mode } = useBackend();
+  const [page, setPage] = useState<ObservationPage | null>(null);
+  useEffect(() => {
+    if (mode !== 'api') return;
+    let live = true;
+    api.get<ObservationPage>(`/api/network/observations${qs({ transaction_id: transactionId })}`).then(
+      (p) => live && setPage(p),
+      () => live && setPage(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [mode, transactionId]);
+  if (mode !== 'api' || !page) return null;
+  return (
+    <div className="obs-list">
+      <h4>Network observations <span className="rule-tag">synthetic</span></h4>
+      {page.items.length === 0 ? (
+        <p className="muted">No synthetic network observation was generated for this transaction (the demo data does not give every transaction one).</p>
+      ) : (
+        <table className="data-table compact">
+          <thead>
+            <tr>
+              <th>Party</th>
+              <th>Wallet</th>
+              <th>IP address</th>
+              <th>Device</th>
+              <th>Session</th>
+              <th>Network</th>
+              <th>Region</th>
+            </tr>
+          </thead>
+          <tbody>
+            {page.items.map((o) => (
+              <tr key={o.observation_id}>
+                <td>{o.observed_party ?? '—'}</td>
+                <td className="mono">{o.wallet_address}</td>
+                <td className="mono">{o.ip_address ? <Link to={`/network?view=clusters&entity=ip:${o.ip_address}`}>{o.ip_address}</Link> : '—'}</td>
+                <td className="mono">{o.device_id ? <Link to={`/network?view=clusters&entity=device:${o.device_id}`}>{o.device_id}</Link> : '—'}</td>
+                <td className="mono">{o.session_id ?? '—'}</td>
+                <td>{o.network_type ?? '—'}</td>
+                <td>{o.geo_region ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="caveat">{page.note}</p>
     </div>
   );
 }

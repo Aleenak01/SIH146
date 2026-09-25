@@ -14,6 +14,7 @@ mixed silently. All timestamps are naive UTC.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -316,3 +317,13 @@ class CaseHistory(Base):
     detail: Mapped[str | None] = mapped_column(Text)
 
     case: Mapped[Case] = relationship(back_populates="history")
+
+
+class AppSetting(Base):
+    """One persisted local setting (monitoring on/off, interval, ...). Values are small JSON scalars; never credentials."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

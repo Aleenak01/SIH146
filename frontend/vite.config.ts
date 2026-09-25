@@ -77,5 +77,8 @@ function pipelineInfo(): Plugin {
 
 export default defineConfig({
   plugins: [react(), pipelineInfo()],
-  server: { fs: { allow: ['..'] } },
+  // /api is forwarded to the local backend (python -m backend, port 8000), so the browser only ever talks to
+  // this origin: no CORS setup, and it also works when the app is opened from a phone on the same network.
+  server: { fs: { allow: ['..'] }, proxy: { '/api': { target: 'http://127.0.0.1:8000' } } },
+  preview: { proxy: { '/api': { target: 'http://127.0.0.1:8000' } } },
 });

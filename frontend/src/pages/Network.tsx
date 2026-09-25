@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { EvidenceCell, PageHeader, Panel, PredictionText, StatusPill } from '../components/bits';
+import { ClustersView } from '../components/ClustersView';
+import { RelatedEntities } from '../components/RelatedEntities';
 import { TransactionTable } from '../components/TransactionTable';
 import { TRANSFER_COLUMNS, downloadCsv, stamp, transferRows } from '../data/export';
 import type { Transfer } from '../data/types';
@@ -10,9 +12,9 @@ import { buildGraph, tracePath, type PathResult } from '../graph/model';
 import { WalletGraph } from '../graph/WalletGraph';
 import { useCases } from '../state/cases';
 import { useConfirm } from '../state/confirm';
-import { useDataset, useFlaggedIds, useTransfers } from '../state/data';
+import { useBackend, useDataset, useFlaggedIds, useTransfers } from '../state/data';
 
-type View = 'transactions' | 'network';
+type View = 'transactions' | 'network' | 'clusters';
 
 /** Query-string state, so every link elsewhere in the app can open this page pre-filtered. */
 function useParamState() {
@@ -32,14 +34,20 @@ function useParamState() {
 
 export function Network() {
   const { get, set } = useParamState();
-  const view: View = get('view') === 'network' ? 'network' : 'transactions';
+  const { mode } = useBackend();
+  const requested = get('view');
+  const view: View = requested === 'network' ? 'network' : requested === 'clusters' && mode === 'api' ? 'clusters' : 'transactions';
   const { transfers, error } = useTransfers();
 
   return (
     <div className="page">
       <PageHeader
         title="Transactions / Network"
-        subtitle="Search the synthetic transaction dataset and explore who transacted with whom. Every row and every link comes from the dataset; nothing is inferred."
+        subtitle={
+          view === 'clusters'
+            ? 'Groups of wallets connected by shared synthetic network observations or by dense transfer activity. Clusters are derived by the analysis and indicate connected activity, not common ownership or wrongdoing.'
+            : 'Search the synthetic transaction dataset and explore who transacted with whom. Every row and every link comes from the dataset; nothing is inferred.'
+        }
         actions={
           <div className="seg" role="tablist" aria-label="View">
             <button type="button" role="tab" aria-selected={view === 'transactions'} className={view === 'transactions' ? 'on' : ''} onClick={() => set({ view: null })}>
@@ -48,12 +56,18 @@ export function Network() {
             <button type="button" role="tab" aria-selected={view === 'network'} className={view === 'network' ? 'on' : ''} onClick={() => set({ view: 'network' })}>
               Network
             </button>
+            {mode === 'api' && (
+              <button type="button" role="tab" aria-selected={view === 'clusters'} className={view === 'clusters' ? 'on' : ''} onClick={() => set({ view: 'clusters' })}>
+                Clusters
+              </button>
+            )}
           </div>
         }
       />
-      {error && <div className="empty-block">Could not load transactions: {error}</div>}
-      {!error && !transfers && <div className="empty-block">Loading transactions…</div>}
-      {transfers && (view === 'transactions' ? <TransactionsView transfers={transfers} /> : <NetworkView transfers={transfers} />)}
+      {view === 'clusters' && <ClustersView />}
+      {view !== 'clusters' && error && <div className="empty-block">Could not load transactions: {error}</div>}
+      {view !== 'clusters' && !error && !transfers && <div className="empty-block">Loading transactions…</div>}
+      {view !== 'clusters' && transfers && (view === 'transactions' ? <TransactionsView transfers={transfers} /> : <NetworkView transfers={transfers} />)}
     </div>
   );
 }
@@ -69,6 +83,7 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
   const { guard } = useConfirm();
 
   const q = get('q').trim().toLowerCase();
+  const txId = get('tx').trim().toLowerCase(); // set by search results: a transaction ID (backend mode)
   const withWallet = get('with').trim().toLowerCase(); // set by links: only transfers between q and this wallet
   const sender = get('sender').trim().toLowerCase();
   const receiver = get('receiver').trim().toLowerCase();
@@ -85,6 +100,7 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
     const t1 = end ? Date.parse(`${end}T00:00:00Z`) + DAY : null;
     return transfers.filter(
       (t) =>
+        (!txId || (t.id ?? '').toLowerCase().includes(txId)) &&
         (!q || t.from.includes(q) || t.to.includes(q)) &&
         (!withWallet || (t.from.includes(q) && t.to.includes(withWallet)) || (t.to.includes(q) && t.from.includes(withWallet))) &&
         (!sender || t.from.includes(sender)) &&
@@ -95,7 +111,7 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
         (t1 === null || t.ts < t1) &&
         (!flaggedOnly || flaggedIds.has(t.from) || flaggedIds.has(t.to)),
     );
-  }, [transfers, q, withWallet, sender, receiver, min, max, start, end, flaggedOnly, flaggedIds]);
+  }, [transfers, txId, q, withWallet, sender, receiver, min, max, start, end, flaggedOnly, flaggedIds]);
 
   const totalBtc = useMemo(() => rows.reduce((n, t) => n + t.amountBtc, 0), [rows]);
   const wallets = useMemo(() => {
@@ -106,7 +122,7 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
     }
     return s.size;
   }, [rows]);
-  const filtered = ['q', 'with', 'sender', 'receiver', 'min', 'max', 'start', 'end', 'flagged'].some((k) => sp.has(k));
+  const filtered = ['tx', 'q', 'with', 'sender', 'receiver', 'min', 'max', 'start', 'end', 'flagged'].some((k) => sp.has(k));
 
   const exportCsv = async () => {
     const ok = await guard('confirmExport', {
@@ -153,6 +169,14 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
           <input type="checkbox" checked={flaggedOnly} onChange={(e) => set({ flagged: e.target.checked ? '1' : null })} />
           Involving ML-flagged wallets
         </label>
+        {txId && (
+          <span className="chip">
+            Transaction {get('tx')}
+            <button type="button" aria-label="Remove transaction filter" onClick={() => set({ tx: null })}>
+              ×
+            </button>
+          </span>
+        )}
         {withWallet && (
           <span className="chip">
             Between {get('q')} and {get('with')}
@@ -162,7 +186,7 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
           </span>
         )}
         {filtered && (
-          <button type="button" className="btn btn-sm" onClick={() => set({ q: null, with: null, sender: null, receiver: null, min: null, max: null, start: null, end: null, flagged: null })}>
+          <button type="button" className="btn btn-sm" onClick={() => set({ tx: null, q: null, with: null, sender: null, receiver: null, min: null, max: null, start: null, end: null, flagged: null })}>
             Clear filters
           </button>
         )}
@@ -200,6 +224,7 @@ function NetworkView({ transfers }: { transfers: Transfer[] }) {
   const { byId, wallets } = useDataset();
   const { statusOf } = useCases();
   const { guard } = useConfirm();
+  const { mode } = useBackend();
 
   const topWallet = useMemo(() => wallets.reduce((a, b) => (b.priorityRank < a.priorityRank ? b : a)), [wallets]);
   const requested = get('wallet');
@@ -417,6 +442,8 @@ function NetworkView({ transfers }: { transfers: Transfer[] }) {
           </p>
         )}
       </Panel>
+
+      {mode === 'api' && <RelatedEntities wallet={wallet} />}
     </>
   );
 }
