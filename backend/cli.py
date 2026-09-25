@@ -17,6 +17,7 @@ from .analysis.clustering import refresh_clusters
 from .config import load_settings
 from .database import Database
 from .ingestion.base import DatasetError
+from .ingestion.real_bitcoin import SourceNotConfigured, SourceUnavailable
 from .models import Base, NetworkObservation, Transaction, Wallet
 from .services import network as network_service
 from .services.importer import ImportConflict, import_synthetic_csv
@@ -31,6 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("generate-network", help="generate the SYNTHETIC network-observation dataset CSV from the imported transactions")
     imn = sub.add_parser("import-network", help="import the synthetic network-observation CSV (generates it first if it does not exist)")
     imn.add_argument("--replace", action="store_true", help="remove existing synthetic observations first")
+    fr = sub.add_parser("fetch-real", help="OPTIONAL: read recent Bitcoin blocks from the configured Esplora API (needs SIH146_REAL_BITCOIN_ENABLED=true)")
+    fr.add_argument("--blocks", type=int, default=1, help="how many of the newest blocks to read (default 1)")
+    fr.add_argument("--heights", type=int, nargs="+", help="explicit block heights instead of the newest blocks")
+    fr.add_argument("--max-tx-per-block", type=int, default=None, help="most transactions to read from each block")
+    an = sub.add_parser("analyze", help="run the analysis for one data source now")
+    an.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     sub.add_parser("stats", help="show what the database holds")
     args = parser.parse_args(argv)
 
@@ -56,6 +63,25 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Imported {r.inserted} synthetic observations ({r.skipped_existing} already present, {len(r.rejected)} rejected); {r.observations_total} in the database.")
             c = refresh_clusters(db, "synthetic")
             print(f"Clusters: {c.network_clusters} shared-network-observation, {c.transaction_communities} transaction communities.")
+        elif args.command == "fetch-real":
+            from .services import real_source
+
+            state = real_source.RealSourceState()
+            r = real_source.fetch_and_ingest(db, settings, state, blocks=args.blocks, heights=args.heights, max_tx_per_block=args.max_tx_per_block)
+            print(f"Read {r['transactions_examined']} real transactions from {len(r['blocks'])} block(s) "
+                  f"(heights {', '.join(str(b['height']) for b in r['blocks'])}) with {r['requests']} API requests.")
+            print(f"Stored {r['inserted']} transfers as source=real_bitcoin ({r['duplicates']} already present, {r['rejected']} rejected). Skipped: {r['skipped'] or 'none'}.")
+        elif args.command == "analyze":
+            from .analysis.ml_bridge import AnalysisError
+            from .analysis.service import run_analysis
+
+            try:
+                s = run_analysis(db, args.source, trigger="manual")
+            except AnalysisError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 1
+            print(f"Analysed {s.transfer_count} {args.source} transfers: {s.scored_wallets} wallets scored, {s.unscored_wallets} not scored "
+                  f"(too little activity), {s.anomalous_wallets} flagged, {s.leads_total} leads, {s.clusters_total} clusters.")
         elif args.command == "stats":
             with db.session() as s:
                 print(f"Database: {settings.db_path}")
@@ -63,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
                     for source, n in s.execute(select(model.source, func.count()).group_by(model.source)):
                         print(f"  {name:<13}{source:<14}{n}")
                 print(f"  {'observations':<13}{'synthetic':<14}{s.scalar(select(func.count()).select_from(NetworkObservation)) or 0}")
-    except (DatasetError, ImportConflict) as e:
+    except (DatasetError, ImportConflict, SourceNotConfigured, SourceUnavailable) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     finally:

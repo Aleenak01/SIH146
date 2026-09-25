@@ -90,7 +90,7 @@ function toDataset(b: BulkAnalysis): Dataset {
 }
 
 async function fetchAllTransfers(): Promise<Transfer[]> {
-  const page = (offset: number) => api.get<{ total: number; items: ApiTransaction[] }>(`/api/transactions${qs({ limit: 500, offset, sort: 'timestamp', order: 'asc' })}`);
+  const page = (offset: number) => api.get<{ total: number; items: ApiTransaction[] }>(`/api/transactions${qs({ limit: 500, offset, sort: 'timestamp', order: 'asc', source: 'synthetic' })}`);
   const first = await page(0);
   const rest = await Promise.all(Array.from({ length: Math.max(0, Math.ceil(first.total / 500) - 1) }, (_, i) => page((i + 1) * 500)));
   const seen = new Map<string, Transfer>();
@@ -107,6 +107,9 @@ async function fetchAllTransfers(): Promise<Transfer[]> {
       });
   return [...seen.values()].sort((a, b) => a.ts - b.ts);
 }
+
+/** Transactions of the synthetic source only: real Bitcoin data, if any was fetched, is kept out of these screens. */
+export const syntheticTx = (o: Overview) => o.by_source.synthetic?.transactions ?? 0;
 
 const analysisInfo = (b: BulkAnalysis): AnalysisInfo => ({
   runId: b.run_id,
@@ -175,7 +178,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     const [ov, mon] = await Promise.all([api.get<Overview>('/api/overview').catch(() => null), api.get<MonitorStatus>('/api/monitor/status').catch(() => null)]);
     let txs: Transfer[] | null = null;
-    if (loadedTx.current === null || (ov && ov.transactions_total !== loadedTx.current)) {
+    if (loadedTx.current === null || (ov && syntheticTx(ov) !== loadedTx.current)) {
       try {
         txs = await fetchAllTransfers();
       } catch (e) {

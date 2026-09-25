@@ -46,6 +46,15 @@ class Settings:
     stream_rate_per_minute: float = 30.0
     network_csv: Path = PROJECT_ROOT / "data" / "synthetic_network_observations.csv"   # SYNTHETIC network observations
     network_seed: int = 148
+    # Optional real Bitcoin source (Esplora-compatible public API, e.g. blockstream.info). OFF unless enabled here; the
+    # application never contacts it on its own (the monitor does not use it) and works fully offline without it.
+    real_bitcoin_enabled: bool = False
+    real_bitcoin_base_url: str = "https://blockstream.info/api"
+    real_bitcoin_api_key: str | None = field(default=None, repr=False)      # optional; never returned by the API or logged
+    real_bitcoin_timeout: float = 15.0
+    real_bitcoin_request_delay: float = 0.3         # seconds between requests (be polite to public APIs)
+    real_bitcoin_max_blocks: int = 5                # most blocks one fetch may read
+    real_bitcoin_max_tx_per_block: int = 500        # most transactions read from each block
 
     @property
     def database_url(self) -> str:
@@ -68,4 +77,11 @@ def load_settings() -> Settings:
         stream_rate_per_minute=float(env("SIH146_STREAM_RATE_PER_MINUTE", "30")),
         network_csv=_resolve(env("SIH146_NETWORK_CSV", "data/synthetic_network_observations.csv")),
         network_seed=int(env("SIH146_NETWORK_SEED", "148")),
+        real_bitcoin_enabled=env("SIH146_REAL_BITCOIN_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on"),
+        real_bitcoin_base_url=env("SIH146_REAL_BITCOIN_BASE_URL", "https://blockstream.info/api").strip().rstrip("/"),
+        real_bitcoin_api_key=(env("SIH146_REAL_BITCOIN_API_KEY", "").strip() or None),
+        real_bitcoin_timeout=max(1.0, float(env("SIH146_REAL_BITCOIN_TIMEOUT", "15"))),
+        real_bitcoin_request_delay=max(0.0, float(env("SIH146_REAL_BITCOIN_REQUEST_DELAY", "0.3"))),
+        real_bitcoin_max_blocks=max(1, int(env("SIH146_REAL_BITCOIN_MAX_BLOCKS", "5"))),
+        real_bitcoin_max_tx_per_block=max(1, int(env("SIH146_REAL_BITCOIN_MAX_TX_PER_BLOCK", "500"))),
     )

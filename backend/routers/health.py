@@ -38,7 +38,7 @@ def overview(session: Session = Depends(get_session)):
         last_analysis_at=run.finished_at if run else None, analysis_stale=analysis_is_stale(session, "synthetic"),
         anomalous_wallets=anomalous, leads_total=leads,
         network_observations_total=session.scalar(select(func.count()).select_from(NetworkObservation)) or 0,
-        clusters_total=session.scalar(select(func.count()).select_from(EntityCluster)) or 0,
+        clusters_total=session.scalar(select(func.count()).select_from(EntityCluster).where(EntityCluster.source == "synthetic")) or 0,   # synthetic only: real data is kept apart
         cases_total=session.scalar(select(func.count()).select_from(Case)) or 0,
         active_cases=session.scalar(select(func.count()).select_from(Case).where(Case.status != "Closed")) or 0,
         transactions_total=sum(v["transactions"] for v in by_source.values()),

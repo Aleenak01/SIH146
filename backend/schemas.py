@@ -141,7 +141,7 @@ class OverviewOut(BaseModel):
     anomalous_wallets: int | None = None
     leads_total: int | None = None
     network_observations_total: int = 0        # SYNTHETIC observations
-    clusters_total: int = 0
+    clusters_total: int = 0                    # synthetic clusters (real-data clusters are listed via /api/clusters?source=real_bitcoin)
     cases_total: int = 0
     active_cases: int = 0                      # cases that are not Closed
 

@@ -63,7 +63,7 @@ def test_settings_read_defaults_and_state_that_the_data_is_synthetic(client):
     body = client.get("/api/settings").json()
     assert set(body["settings"]) == {"monitor_enabled", "interval_seconds", "auto_analysis", "stream_enabled", "stream_rate_per_minute"}
     assert body["saved_keys"] == [] and body["data_source"]["is_real_data"] is False and body["data_source"]["mode"] == "synthetic"
-    assert body["data_source"]["real_bitcoin"]["available"] is False and "secret" not in str(body).replace("secrets_note", "")
+    assert body["data_source"]["real_bitcoin"]["status"] == "not_configured" and "not configured" in body["data_source"]["real_bitcoin"]["note"] and "secret" not in str(body).replace("secrets_note", "")
 
 
 def test_settings_update_applies_and_persists(client):

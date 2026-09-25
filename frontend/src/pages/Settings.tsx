@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import pipeline from 'virtual:pipeline-info';
 import { Download } from 'lucide-react';
 import { api } from '../api/client';
-import type { CaseDetail, SettingsView } from '../api/types';
+import type { CaseDetail, RealSourceStatus, SettingsView } from '../api/types';
 import { PageHeader, Panel } from '../components/bits';
 import { WALLET_COLUMNS, downloadCsv, downloadJson, stamp, walletRows, TRANSFER_COLUMNS, transferRows } from '../data/export';
 import { TOTAL_RULES } from '../data/rules';
@@ -23,6 +23,7 @@ export function Settings() {
         subtitle="Monitoring and data-source settings (saved in the local backend), preferences for this browser, and a description of the local prototype configuration. Nothing here changes the analysis models or rules."
       />
       <DataSource />
+      <RealSource />
       <Appearance />
       <Confirmations />
       <Configuration />
@@ -455,6 +456,37 @@ function DataSource() {
         </button>
         {saved && !dirty && <span className="muted">Saved.</span>}
       </p>
+    </Panel>
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+/** The optional real Bitcoin source: configuration only. It is set in the local .env (never here) and is off by default. */
+function RealSource() {
+  const backend = useBackend();
+  const [s, setS] = useState<RealSourceStatus | null>(null);
+  useEffect(() => {
+    if (backend.mode !== 'api') return;
+    api.get<RealSourceStatus>('/api/sources/real-bitcoin').then(setS, () => setS(null));
+  }, [backend.mode]);
+  if (backend.mode !== 'api' || !s) return null;
+  const available = s.features.filter((f) => f.availability === 'available').length;
+  const needTwo = s.features.filter((f) => f.availability === 'needs_two_transactions').map((f) => f.feature);
+  return (
+    <Panel
+      title="Real Bitcoin source (optional)"
+      note="Off by default. Configured only in the local .env file, never in this app, and nothing contacts the network until a fetch is requested from the API or command line. The screens in this app show synthetic data only."
+    >
+      <div className="kv">
+        <dl>
+          <Row label="Status" value={s.label} />
+          <Row label="Source" value={s.enabled ? `${s.base_url} (Esplora-compatible API, read-only)${s.api_key_configured ? ', API key set' : ''}` : 'Not configured'} />
+          <Row label="Stored real data" value={s.stored.transactions ? `${fmtInt(s.stored.transactions)} transfers, ${fmtInt(s.stored.wallets)} wallets (${fmtInt(s.stored.wallets_with_two_or_more_transactions)} with two or more), kept apart from the synthetic data` : 'None'} />
+          <Row label="Model features" value={`${available} of ${s.features.length} computable for any wallet with one transaction; ${needTwo.length} need two or more transactions (${needTwo.join(', ')}), otherwise the wallet is left unscored`} />
+          <Row label="IP / device / session" value="Not available for real data: Bitcoin transactions do not contain them, and none are ever attached" />
+          <Row label="How to enable" value={s.how_to_enable} />
+        </dl>
+      </div>
     </Panel>
   );
 }

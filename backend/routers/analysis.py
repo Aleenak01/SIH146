@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -24,13 +24,15 @@ def _run_out(r: AnalysisRun) -> AnalysisRunOut:
 
 
 @router.post("/run", response_model=RunSummaryOut)
-def run_now(db: Database = Depends(get_db)):
+def run_now(db: Database = Depends(get_db), source: Literal["synthetic", "real_bitcoin"] = "synthetic"):
     """
-    Run the analysis now (features -> Isolation Forest -> forensic rules -> fusion -> leads) over all synthetic
-    transactions. The monitor does this automatically when new data arrives; this is the manual equivalent.
+    Run the analysis now (features -> Isolation Forest -> forensic rules -> fusion -> leads) over the transactions of one
+    source (default synthetic). The monitor does this automatically for synthetic data; this is the manual equivalent.
+    Real data is analysed only when asked for here, on its own, never mixed with the synthetic data. Wallets with fewer
+    than two transactions cannot be scored, and at least 20 scoreable wallets are required.
     """
     try:
-        return RunSummaryOut(**run_analysis(db, "synthetic", trigger="manual").as_dict())
+        return RunSummaryOut(**run_analysis(db, source, trigger="manual").as_dict())
     except AnalysisBusy as e:
         raise AppError(409, "analysis_in_progress", str(e)) from e
     except AnalysisError as e:

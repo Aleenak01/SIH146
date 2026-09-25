@@ -5,7 +5,7 @@ import { ActivityTrend, ScoreDistribution } from '../components/charts';
 import { WalletTable } from '../components/WalletTable';
 import { fmtDate, fmtDateTime, fmtInt, fmtPct } from '../format';
 import { useCases } from '../state/cases';
-import { useBackend, useDataset, useTransfers } from '../state/data';
+import { syntheticTx, useBackend, useDataset, useTransfers } from '../state/data';
 import type { EvidenceLevel } from '../data/types';
 
 const cellLink = (scope: 'flagged' | 'normal', level: EvidenceLevel) =>
@@ -87,11 +87,11 @@ export function Dashboard() {
 
       {api ? (
         <div className="metrics metrics-6" role="list">
-          <Metric to="/network" label="Total transactions" value={fmtInt(overview?.transactions_total ?? transfers?.length ?? 0)} sub={`Distinct transfers · ${fmtInt(s.records)} wallet-level records`} />
+          <Metric to="/network" label="Total transactions" value={fmtInt(overview ? syntheticTx(overview) : transfers?.length ?? 0)} sub={`Distinct transfers · ${fmtInt(s.records)} wallet-level records`} />
           <Metric
             to="/anomalies?scope=all"
             label="Wallets monitored"
-            value={fmtInt(overview?.wallets_total ?? wallets.length)}
+            value={fmtInt(overview?.by_source.synthetic?.wallets ?? wallets.length)}
             sub={`${fmtInt(wallets.length)} analysed${analysis && analysis.unscored > 0 ? ` · ${fmtInt(analysis.unscored)} too quiet to score` : ''}`}
           />
           <Metric to="/anomalies?scope=flagged" label="Anomalies" value={fmtInt(s.flagged)} sub={`ML-flagged · ${fmtPct((s.flagged / wallets.length) * 100)} of wallets`} />

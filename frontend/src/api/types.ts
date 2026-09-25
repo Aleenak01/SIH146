@@ -234,6 +234,22 @@ export interface SearchOut {
   notes: string[];
 }
 
+export interface RealSourceStatus {
+  status: 'configured' | 'not_configured';
+  label: string;
+  enabled: boolean;
+  base_url: string;
+  api_key_configured: boolean;
+  stored: { transactions: number; wallets: number; wallets_with_two_or_more_transactions: number };
+  last_fetch: { fetched_at: string; transfers: number; inserted: number } | null;
+  last_error: string | null;
+  how_to_enable: string;
+  data_separation: string;
+  normalization: string[];
+  features: { feature: string; availability: 'available' | 'needs_two_transactions'; note: string }[];
+  network_metadata: Record<string, string>;
+}
+
 export interface SettingsView {
   settings: { monitor_enabled: boolean; interval_seconds: number; auto_analysis: boolean; stream_enabled: boolean; stream_rate_per_minute: number };
   saved_keys: string[];

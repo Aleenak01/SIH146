@@ -16,9 +16,10 @@ from . import __version__
 from .config import Settings, load_settings
 from .database import Database
 from .errors import install_error_handlers
-from .routers import analysis, cases, clusters, graph, health, imports, leads, monitor as monitor_router, network, search, settings as settings_router, transactions, wallets
+from .routers import analysis, cases, clusters, graph, health, imports, leads, monitor as monitor_router, network, search, settings as settings_router, sources, transactions, wallets
 from .services import app_settings
 from .services.monitor import Monitor
+from .services.real_source import RealSourceState
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -43,10 +44,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = db
     app.state.monitor = monitor
+    app.state.real_source = RealSourceState()          # what this process did with the optional real Bitcoin source
 
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
     install_error_handlers(app)
-    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search, settings_router):
+    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search, settings_router, sources):
         app.include_router(module.router)
     return app
 
