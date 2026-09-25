@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from .. import __version__
+from ..deps import get_session
+from ..models import Transaction, Wallet
+from ..schemas import OverviewOut
+
+router = APIRouter(prefix="/api", tags=["system"])
+
+
+@router.get("/health")
+def health(session: Session = Depends(get_session)):
+    """Liveness check that also proves the database answers. Exposes no secrets or paths."""
+    session.scalar(select(func.count()).select_from(Wallet))
+    return {"status": "ok", "version": __version__, "database": "sqlite", "mode": "local"}
+
+
+@router.get("/overview", response_model=OverviewOut)
+def overview(session: Session = Depends(get_session)):
+    """Record counts, split by data source (synthetic / real_bitcoin)."""
+    by_source: dict[str, dict[str, int]] = {}
+    for source, n in session.execute(select(Transaction.source, func.count()).group_by(Transaction.source)):
+        by_source.setdefault(source, {"transactions": 0, "wallets": 0})["transactions"] = n
+    for source, n in session.execute(select(Wallet.source, func.count()).group_by(Wallet.source)):
+        by_source.setdefault(source, {"transactions": 0, "wallets": 0})["wallets"] = n
+    first, last = session.execute(select(func.min(Transaction.timestamp), func.max(Transaction.timestamp))).one()
+    return OverviewOut(
+        transactions_total=sum(v["transactions"] for v in by_source.values()),
+        wallets_total=sum(v["wallets"] for v in by_source.values()),
+        by_source=by_source, first_transaction_at=first, last_transaction_at=last,
+    )

@@ -93,3 +93,13 @@ except to correct mistakes.
 4. **Validation:** earliest 2025-10-01 06:17:43, latest 2026-09-24 21:46:39; all 12 months present (7.1%-10.0% each; August is highest because the existing dormant-wallet wake-up pattern sits late in the timeline); 10,000 rows, mirrored, 410 wallets. 13 of 18 features are identical to before (the 5 time-based ones changed). Isolation Forest still flags 41 wallets; 39 of them match the previous run; ML score rank correlation with the previous run 0.991. `ml/test_result_fusion.py` passes.
 5. **Note:** Cases saved in a browser before this change refer to the previous dataset; clear them in Settings > Local investigation data if a fresh start is wanted.
 6. **Next step:** awaiting instruction.
+
+## 2026-09-25 – Backend + database (Checkpoint 2 of the local-platform upgrade)
+
+1. **What changed:** Added `backend/` (FastAPI + SQLAlchemy + SQLite), `requirements.txt`, `requirements-dev.txt`, `.env.example`, `pytest.ini`; `.gitignore` now ignores `.env` and `data/*.db`. `ml/`, `generate_dataset.py`, the CSVs and the frontend were not touched. Rollback tag: `sih146-checkpoint-before-backend`.
+2. **Why:** First step towards a persistent, API-driven investigator platform that wraps (does not replace) the existing offline pipeline.
+3. **Implemented and tested:** SQLite schema (13 tables; only `transactions` and `wallets` are populated so far), CSV importer (collapses the mirrored rows into 5,000 transactions with surrogate IDs `syn-000001...`, idempotent, `--replace` after regenerating the dataset), validated ingestion core, transaction/wallet/import/health/overview endpoints, uniform JSON errors, CLI (`python -m backend.cli init-db | import-csv | stats`), server (`python -m backend`).
+4. **Not yet implemented (schema only):** network observations, analysis results, leads, clusters, cases; monitoring; real-data source.
+5. **Dependencies:** fastapi, uvicorn, sqlalchemy, networkx (later), pytest + httpx (tests), all installed in `.venv` only.
+6. **Validation:** 90 new backend tests + the existing 11 fusion tests pass; per-wallet transaction counts in SQLite match `data/wallet_behavior_features.csv` for all 410 wallets; the four `ml/*.py` CLIs still run with identical results; live server exercised over HTTP.
+7. **Note:** on this machine importing pandas takes 5-11 s and the API about 11 s, so server start-up takes roughly 10-15 s.
