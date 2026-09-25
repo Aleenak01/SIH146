@@ -1,0 +1,14 @@
+# Direct runtime dependencies (installed in .venv). Everything here works fully offline.
+# Existing analysis pipeline
+pandas==3.0.6
+numpy==2.5.3
+scikit-learn==1.9.1
+scipy==1.18.1
+
+# Backend API and database
+fastapi==0.141.1
+uvicorn==0.53.0
+sqlalchemy==2.1.0
+
+# Graph clustering (community detection)
+networkx==3.7

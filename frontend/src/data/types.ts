@@ -60,8 +60,10 @@ export interface Transfer {
   amountBtc: number;
   inputCount: number;
   outputCount: number;
-  /** Line number of the Outgoing record in synthetic_bitcoin_transactions.csv (the file has no transaction ID). */
-  row: number;
+  /** Line number of the Outgoing record in synthetic_bitcoin_transactions.csv (the file has no transaction ID). Absent when loaded from the backend. */
+  row?: number;
+  /** Backend transaction ID (syn-000001 ...). Absent when loaded from the bundled CSV. */
+  id?: string;
 }
 
 /** Joined, per-wallet view used by every screen. */
@@ -72,4 +74,14 @@ export interface WalletRecord {
   /** 1 = highest combined_score among all wallets. */
   priorityRank: number;
   flagged: boolean; // ML prediction === 'Anomalous'
+  /** Only when loaded from the backend: lead / priority / review state (absent in the bundled-CSV fallback). */
+  lead?: LeadInfo;
+}
+
+export interface LeadInfo {
+  priorityLevel: 'High' | 'Medium' | 'Low';
+  isLead: boolean;
+  reasons: string[];
+  caseIds: string[];
+  review: 'Unreviewed' | 'Under Review' | 'Case Created';
 }

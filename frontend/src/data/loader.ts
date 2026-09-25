@@ -1,7 +1,7 @@
 import Papa from 'papaparse';
 import fusionCsv from '../../../data/fusion_results.csv?raw';
 import featuresCsv from '../../../data/wallet_behavior_features.csv?raw';
-import type { FeatureKey, FeatureRow, FusionRow, Transfer, WalletRecord } from './types';
+import type { FeatureKey, FeatureRow, FusionRow, LeadInfo, Transfer, WalletRecord } from './types';
 
 function parse<T>(csv: string): T[] {
   const res = Papa.parse<T>(csv, { header: true, dynamicTyping: true, skipEmptyLines: true });
@@ -16,11 +16,24 @@ export interface Dataset {
   /** Score separating the model's 'Normal' and 'Anomalous' predictions (derived from the CSV). */
   mlBoundary: number;
   issues: string[];
+  /** Where the records came from: the local backend, or the CSV files bundled with the app. */
+  origin: 'api' | 'csv';
 }
 
 export function loadDataset(): Dataset {
-  const fusion = parse<FusionRow>(fusionCsv);
-  const features = parse<FeatureRow>(featuresCsv);
+  return assembleDataset(parse<FusionRow>(fusionCsv), parse<FeatureRow>(featuresCsv), 'csv');
+}
+
+/**
+ * Joins fusion and feature rows into the per-wallet view every screen uses. `extra` carries what only the backend
+ * knows (its own priority rank and the lead / review state); without it the rank is derived from combined_score.
+ */
+export function assembleDataset(
+  fusion: FusionRow[],
+  features: FeatureRow[],
+  origin: 'api' | 'csv',
+  extra?: { ranks: Map<string, number>; leads: Map<string, LeadInfo> },
+): Dataset {
   const featById = new Map(features.map((f) => [f.wallet_address, f]));
 
   const issues: string[] = [];
@@ -38,8 +51,9 @@ export function loadDataset(): Dataset {
       id: f.wallet_address,
       fusion: f,
       features: feat,
-      priorityRank: rank.get(f.wallet_address)!,
+      priorityRank: extra?.ranks.get(f.wallet_address) ?? rank.get(f.wallet_address)!,
       flagged: f.ml_anomaly_prediction === 'Anomalous',
+      lead: extra?.leads.get(f.wallet_address),
     });
   }
   const invalid = fusion.filter((f) => !f.valid).length;
@@ -53,7 +67,7 @@ export function loadDataset(): Dataset {
   const minAnom = Math.min(...wallets.filter((w) => w.flagged).map((w) => w.fusion.ml_anomaly_score));
   const mlBoundary = (maxNormal + minAnom) / 2;
 
-  return { wallets, byId: new Map(wallets.map((w) => [w.id, w])), population, mlBoundary, issues };
+  return { wallets, byId: new Map(wallets.map((w) => [w.id, w])), population, mlBoundary, issues, origin };
 }
 
 /** Percent of wallets whose value is at or below `value` (descriptive position, not a score). */

@@ -53,6 +53,8 @@ export const WALLET_COLUMNS = [
   'combined_score',
   'priority_rank',
   'review_status',
+  'priority_level',
+  'is_lead',
 ];
 
 /** Anomaly / investigation results exactly as in the pipeline output, plus rank and review status. */
@@ -67,9 +69,11 @@ export const walletRows = (wallets: WalletRecord[], statusOf: (id: string) => Re
     w.fusion.combined_score,
     w.priorityRank,
     statusOf(w.id),
+    w.lead?.priorityLevel,
+    w.lead?.isLead,
   ]);
 
-export const TRANSFER_COLUMNS = ['timestamp_utc', 'sender', 'receiver', 'amount_btc', 'input_count', 'output_count', 'source_row'];
+export const TRANSFER_COLUMNS = ['timestamp_utc', 'sender', 'receiver', 'amount_btc', 'input_count', 'output_count', 'source_row', 'transaction_id'];
 
 export const transferRows = (rows: Transfer[]): Cell[][] =>
-  rows.map((t) => [new Date(t.ts).toISOString().slice(0, 19).replace('T', ' '), t.from, t.to, t.amountBtc, t.inputCount, t.outputCount, t.row]);
+  rows.map((t) => [new Date(t.ts).toISOString().slice(0, 19).replace('T', ' '), t.from, t.to, t.amountBtc, t.inputCount, t.outputCount, t.row, t.id]);

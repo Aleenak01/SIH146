@@ -14,6 +14,11 @@ export function StatusPill({ status }: { status: ReviewStatus }) {
   );
 }
 
+/** Prototype priority band (from the combined-result rank). */
+export function PriorityPill({ level }: { level: 'High' | 'Medium' | 'Low' }) {
+  return <span className={`prio prio-${level.toLowerCase()}`}>{level}</span>;
+}
+
 export function CaseStatusPill({ status }: { status: CaseStatus }) {
   const cls = status === 'Open' ? 'case' : status === 'Under investigation' ? 'review' : 'unreviewed';
   return (

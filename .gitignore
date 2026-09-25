@@ -1,3 +1,9 @@
 ﻿/.venv/
 __pycache__/
 *.pyc
+# local application state (never commit)
+.env
+data/*.db
+data/*.db-*
+.pytest_cache/
+data/stream_inbox/

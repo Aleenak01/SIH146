@@ -1,6 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { FolderOpen, LayoutDashboard, Moon, Network, Settings, Sun, TriangleAlert } from 'lucide-react';
+import { useBackend } from '../state/data';
 import { useTheme } from '../state/theme';
+import { ConnectionBanner } from './ConnectionBanner';
+import { GlobalSearch } from './GlobalSearch';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -12,10 +15,12 @@ const NAV = [
 
 export function Shell() {
   const { theme, setTheme } = useTheme();
+  const { mode, online } = useBackend();
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">Bitcoin Transaction Intelligence</div>
+        {mode === 'api' && <GlobalSearch />}
         <nav aria-label="Primary">
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
@@ -33,10 +38,15 @@ export function Shell() {
               <Moon size={14} aria-hidden="true" /> Dark
             </button>
           </div>
-          <p className="foot-note">Offline prototype. Synthetic transaction data; no external services.</p>
+          <p className="conn-line">
+            <span className={`conn-dot ${mode === 'api' && online ? 'ok' : 'off'}`} aria-hidden="true" />
+            {mode === 'api' ? (online ? 'Local backend connected' : 'Backend not answering') : 'Offline · bundled CSV'}
+          </p>
+          <p className="foot-note">Local prototype. Synthetic transaction data; no external services.</p>
         </div>
       </aside>
       <main className="main">
+        <ConnectionBanner />
         <Outlet />
       </main>
     </div>

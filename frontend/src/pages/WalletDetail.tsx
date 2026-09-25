@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { EvidenceCell, PageHeader, Panel, PredictionText, StatusPill } from '../components/bits';
+import { EvidenceCell, PageHeader, Panel, PredictionText, PriorityPill, StatusPill } from '../components/bits';
 import { CreateCaseDialog } from '../components/CreateCaseDialog';
+import { RelatedEntities } from '../components/RelatedEntities';
 import { FEATURE_GROUPS, RULES, TOTAL_RULES, parseRuleNames, ruleLabel, splitFindings } from '../data/rules';
 import { median, percentileRank } from '../data/loader';
 import type { FeatureKey, WalletRecord } from '../data/types';
@@ -10,7 +11,7 @@ import { fmtDateTime, fmtInt, fmtNum, fmtScore } from '../format';
 import { buildEgoGraph } from '../graph/model';
 import { WalletGraph } from '../graph/WalletGraph';
 import { useCases } from '../state/cases';
-import { useDataset, useTransfers } from '../state/data';
+import { useBackend, useDataset, useTransfers } from '../state/data';
 import { useSettings } from '../state/settings';
 
 const HIGH_PCT = 90; // same reference point the forensic rules use (population 90th percentile)
@@ -19,7 +20,8 @@ export function WalletDetail() {
   const { walletId = '' } = useParams();
   const { byId, wallets, population, mlBoundary } = useDataset();
   const { transfers } = useTransfers();
-  const { statusOf, caseFor, markUnderReview, markUnreviewed, createCase } = useCases();
+  const { statusOf, caseIdsFor, cases, available, markUnderReview, markUnreviewed, createCase } = useCases();
+  const { mode } = useBackend();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const { settings } = useSettings();
@@ -41,7 +43,8 @@ export function WalletDetail() {
 
   const f = wallet.fusion;
   const status = statusOf(wallet.id);
-  const existingCase = caseFor(wallet.id);
+  const caseIds = caseIdsFor(wallet.id);
+  const existingCases = cases.filter((c) => caseIds.includes(c.case_id));
   const ruleNames = parseRuleNames(f.forensic_triggered_rules);
   const sentences = splitFindings(f.forensic_findings, ruleNames);
   const mlRank = wallets.filter((w) => w.fusion.ml_anomaly_score > f.ml_anomaly_score).length + 1;
@@ -58,14 +61,13 @@ export function WalletDetail() {
 
   // Opens the review dialog, or (if the investigator switched that confirmation off in Settings)
   // creates the case straight away with a default title.
-  const startCreate = () => {
-    if (settings.confirmCreateCase || !transfers) {
+  const startCreate = async () => {
+    if (settings.confirmCreateCase) {
       setCreating(true);
       return;
     }
-    const related = transfers.filter((t) => t.from === wallet.id || t.to === wallet.id);
-    const c = createCase({ wallet, title: '', note: '', transactions: related });
-    navigate('/cases', { state: { created: c.id } });
+    const c = await createCase({ title: `Review of ${wallet.id}`, priority: wallet.lead?.priorityLevel ?? null, items: [{ type: wallet.lead?.isLead ? 'lead' : 'wallet', id: wallet.id }] });
+    navigate('/cases', { state: { created: c.case_id } });
   };
 
   return (
@@ -75,26 +77,28 @@ export function WalletDetail() {
         title={<span className="mono">{wallet.id}</span>}
         subtitle={
           <>
-            Priority #{wallet.priorityRank} of {fmtInt(wallets.length)} by combined result · <StatusPill status={status} />
+            Priority #{wallet.priorityRank} of {fmtInt(wallets.length)} by combined result{wallet.lead ? <> · <PriorityPill level={wallet.lead.priorityLevel} />{wallet.lead.isLead ? ' lead' : ''}</> : null} · <StatusPill status={status} />
           </>
         }
         actions={
-          existingCase ? (
-            <Link to={`/cases/${existingCase.id}`} className="btn">
-              Open {existingCase.id}
-            </Link>
+          !available ? null : caseIds.length > 0 ? (
+            caseIds.map((id) => (
+              <Link key={id} to={`/cases/${id}`} className="btn">
+                Open {id}
+              </Link>
+            ))
           ) : (
             <>
               {status === 'Under Review' ? (
-                <button type="button" className="btn" onClick={() => markUnreviewed(wallet.id)}>
+                <button type="button" className="btn" onClick={() => void markUnreviewed(wallet.id)}>
                   Mark unreviewed
                 </button>
               ) : (
-                <button type="button" className="btn" onClick={() => markUnderReview(wallet.id)}>
+                <button type="button" className="btn" onClick={() => void markUnderReview(wallet.id)}>
                   Mark under review
                 </button>
               )}
-              <button type="button" className="btn btn-primary" onClick={startCreate} disabled={!settings.confirmCreateCase && !transfers}>
+              <button type="button" className="btn btn-primary" onClick={() => void startCreate()}>
                 Create case
               </button>
             </>
@@ -287,20 +291,25 @@ export function WalletDetail() {
         )}
       </Panel>
 
+      {mode === 'api' && <RelatedEntities wallet={wallet} />}
+
       <Panel title="Case">
-        {existingCase ? (
-          <div className="case-summary">
-            <div>
-              <b className="mono">{existingCase.id}</b> · {existingCase.title}
+        {existingCases.length > 0 ? (
+          existingCases.map((c) => (
+            <div key={c.case_id} className="case-summary">
+              <div>
+                <b className="mono">{c.case_id}</b> · {c.title}
+              </div>
+              <div className="muted">
+                <Link to={`/cases/${c.case_id}`}>Open case</Link> · Opened {fmtDateTime(c.created_at)} · {c.status}
+              </div>
             </div>
-            <div className="muted">
-              <Link to={`/cases/${existingCase.id}`}>Open case</Link> · Opened {fmtDateTime(existingCase.createdAt)} · {existingCase.status} · {fmtInt(existingCase.relatedTransactions.length)} related
-              transactions attached
-            </div>
-          </div>
+          ))
         ) : (
           <p className="muted">
-            No case has been opened for this wallet. Flagged wallets are leads: whether to open a case is an investigator decision.
+            {available
+              ? 'No case has been opened for this wallet. Flagged wallets are leads: whether to open a case is an investigator decision.'
+              : 'Case management needs the local backend, which is not connected.'}
           </p>
         )}
       </Panel>
@@ -308,13 +317,10 @@ export function WalletDetail() {
       {creating && (
         <CreateCaseDialog
           wallet={wallet}
-          transfers={transfers}
           onCancel={() => setCreating(false)}
-          onCreate={(input) => {
-            const c = createCase({ wallet, ...input });
+          onCreated={(id) => {
             setCreating(false);
-            navigate('/cases', { state: { created: c.id } });
-            return c;
+            navigate('/cases', { state: { created: id } });
           }}
         />
       )}

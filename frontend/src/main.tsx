@@ -8,6 +8,7 @@ import '@fontsource/ibm-plex-mono/500.css';
 import './styles/tokens.css';
 import './styles/app.css';
 import './styles/phase2.css';
+import './styles/phase3.css';
 import App from './App';
 
 createRoot(document.getElementById('root')!).render(

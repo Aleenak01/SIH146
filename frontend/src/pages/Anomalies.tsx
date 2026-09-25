@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { PageHeader } from '../components/bits';
+import { CreateCaseDialog } from '../components/CreateCaseDialog';
 import { WalletTable, type SortKey, type SortState } from '../components/WalletTable';
 import { WALLET_COLUMNS, downloadCsv, stamp, walletRows } from '../data/export';
 import type { EvidenceLevel, WalletRecord } from '../data/types';
 import { fmtInt } from '../format';
 import { useCases, type ReviewStatus } from '../state/cases';
 import { useConfirm } from '../state/confirm';
-import { useDataset } from '../state/data';
+import { useBackend, useDataset } from '../state/data';
+import { useSettings } from '../state/settings';
 
 const PAGE_SIZE = 25;
 const STATUS_ORDER: Record<ReviewStatus, number> = { Unreviewed: 0, 'Under Review': 1, 'Case Created': 2 };
@@ -19,18 +21,29 @@ const LEVELS: EvidenceLevel[] = [
   'Multiple strong behavioural indicators',
 ];
 
-type Scope = 'flagged' | 'normal' | 'all';
+type Scope = 'leads' | 'flagged' | 'normal' | 'all';
 
-/** Filters live in the query string so the Dashboard (and bookmarks) can link straight to a view. */
+/**
+ * Anomalies and investigative leads. Filters live in the query string so the Dashboard (and bookmarks) can link
+ * straight to a view. With the backend connected the default view is the lead queue (ML-flagged wallets plus any
+ * wallet in the High priority band); without it the screen is the original ML-flagged list.
+ */
 export function Anomalies() {
   const { wallets } = useDataset();
-  const { statusOf } = useCases();
+  const { mode } = useBackend();
+  const withLeads = mode === 'api';
+  const { statusOf, available: casesAvailable, createCase } = useCases();
   const { guard } = useConfirm();
+  const { settings } = useSettings();
+  const navigate = useNavigate();
   const [sp, setSp] = useSearchParams();
+  const [creating, setCreating] = useState<WalletRecord | null>(null);
 
-  const scope: Scope = sp.get('scope') === 'all' ? 'all' : sp.get('scope') === 'normal' ? 'normal' : 'flagged';
+  const rawScope = sp.get('scope');
+  const scope: Scope = rawScope === 'all' || rawScope === 'normal' || rawScope === 'flagged' ? rawScope : withLeads ? 'leads' : 'flagged';
   const status = (sp.get('status') as ReviewStatus | null) ?? 'any';
   const evidence = (sp.get('evidence') as EvidenceLevel | null) ?? 'any';
+  const priority = sp.get('priority') ?? 'any';
   const query = sp.get('q') ?? '';
 
   const [sort, setSort] = useState<SortState>({ key: 'combined', dir: 'desc' });
@@ -47,6 +60,16 @@ export function Anomalies() {
   };
 
   const flaggedCount = useMemo(() => wallets.filter((w) => w.flagged).length, [wallets]);
+  const leadCount = useMemo(() => wallets.filter((w) => w.lead?.isLead).length, [wallets]);
+
+  const inScope = (w: WalletRecord) => {
+    switch (scope) {
+      case 'leads': return !!w.lead?.isLead;
+      case 'flagged': return w.flagged;
+      case 'normal': return !w.flagged;
+      case 'all': return true;
+    }
+  };
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -57,6 +80,7 @@ export function Anomalies() {
         case 'evidence':
         case 'rules': return w.fusion.forensic_rule_count;
         case 'combined': return w.fusion.combined_score;
+        case 'priority': return w.priorityRank;
         case 'status': return STATUS_ORDER[statusOf(w.id)];
       }
     };
@@ -64,9 +88,10 @@ export function Anomalies() {
     return wallets
       .filter(
         (w) =>
-          (scope === 'all' || (scope === 'flagged') === w.flagged) &&
+          inScope(w) &&
           (status === 'any' || statusOf(w.id) === status) &&
           (evidence === 'any' || w.fusion.forensic_evidence_level === evidence) &&
+          (priority === 'any' || w.lead?.priorityLevel === priority) &&
           (!q || w.id.includes(q)),
       )
       .sort((a, b) => {
@@ -75,7 +100,8 @@ export function Anomalies() {
         const c = typeof x === 'string' ? x.localeCompare(y as string) : (x as number) - (y as number);
         return c * dir || a.priorityRank - b.priorityRank;
       });
-  }, [wallets, scope, status, evidence, query, sort, statusOf]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallets, scope, status, evidence, priority, query, sort, statusOf]);
 
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pages - 1);
@@ -83,7 +109,7 @@ export function Anomalies() {
 
   const onSort = (key: SortKey) => {
     setPage(0);
-    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'wallet' || key === 'status' ? 'asc' : 'desc' }));
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'wallet' || key === 'status' || key === 'priority' ? 'asc' : 'desc' }));
   };
 
   const exportCsv = async () => {
@@ -95,16 +121,35 @@ export function Anomalies() {
     if (ok) downloadCsv(`sih146-anomalies-${stamp()}.csv`, WALLET_COLUMNS, walletRows(rows, statusOf));
   };
 
+  // Honour the "confirm before creating a case" preference: off means the case opens at once with a default title.
+  const startCreate = async (w: WalletRecord) => {
+    if (settings.confirmCreateCase) {
+      setCreating(w);
+      return;
+    }
+    const c = await createCase({ title: `Review of ${w.id}`, priority: w.lead?.priorityLevel ?? null, items: [{ type: w.lead?.isLead ? 'lead' : 'wallet', id: w.id }] });
+    navigate('/cases', { state: { created: c.case_id } });
+  };
+
   return (
     <div className="page">
       <PageHeader
         title="Anomalies"
-        subtitle={`${fmtInt(flaggedCount)} of ${fmtInt(wallets.length)} wallets were flagged for investigation by the ML model. A flag is a lead, not a case: an investigator decides whether to open one.`}
+        subtitle={
+          withLeads
+            ? `${fmtInt(leadCount)} investigative leads: the ${fmtInt(flaggedCount)} wallets the ML model flagged plus any wallet in the High priority band, ranked by the prototype combined result. A lead is a starting point for review, not a case: an investigator decides whether to open one.`
+            : `${fmtInt(flaggedCount)} of ${fmtInt(wallets.length)} wallets were flagged for investigation by the ML model. A flag is a lead, not a case: an investigator decides whether to open one.`
+        }
       />
 
       <div className="toolbar">
         <div className="seg" role="group" aria-label="Scope">
-          <button type="button" className={scope === 'flagged' ? 'on' : ''} onClick={() => setParam({ scope: null })}>
+          {withLeads && (
+            <button type="button" className={scope === 'leads' ? 'on' : ''} onClick={() => setParam({ scope: null })}>
+              Leads ({fmtInt(leadCount)})
+            </button>
+          )}
+          <button type="button" className={scope === 'flagged' ? 'on' : ''} onClick={() => setParam({ scope: withLeads ? 'flagged' : null })}>
             ML-flagged ({fmtInt(flaggedCount)})
           </button>
           <button type="button" className={scope === 'normal' ? 'on' : ''} onClick={() => setParam({ scope: 'normal' })}>
@@ -114,6 +159,17 @@ export function Anomalies() {
             All ({fmtInt(wallets.length)})
           </button>
         </div>
+        {withLeads && (
+          <label className="ctl">
+            <span>Priority</span>
+            <select value={priority} onChange={(e) => setParam({ priority: e.target.value })}>
+              <option value="any">Any</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+          </label>
+        )}
         <label className="ctl">
           <span>Evidence</span>
           <select value={evidence} onChange={(e) => setParam({ evidence: e.target.value })}>
@@ -150,7 +206,7 @@ export function Anomalies() {
         </button>
       </div>
 
-      <WalletTable rows={visible} sort={sort} onSort={onSort} />
+      <WalletTable rows={visible} sort={sort} onSort={onSort} leads={withLeads} onCreateCase={casesAvailable ? startCreate : undefined} />
 
       {pages > 1 && (
         <div className="pager">
@@ -164,6 +220,17 @@ export function Anomalies() {
             Next
           </button>
         </div>
+      )}
+
+      {creating && (
+        <CreateCaseDialog
+          wallet={creating}
+          onCancel={() => setCreating(null)}
+          onCreated={(id) => {
+            setCreating(null);
+            navigate('/cases', { state: { created: id } });
+          }}
+        />
       )}
     </div>
   );

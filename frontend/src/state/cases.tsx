@@ -1,230 +1,136 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Transfer, WalletRecord } from '../data/types';
-import { parseRuleNames } from '../data/rules';
+import { api, qs } from '../api/client';
+import type { CaseDetail, CasePriority, CaseStatus, CaseSummary, ItemType } from '../api/types';
+import { useBackend, useDataset } from './data';
 
 // ---------------------------------------------------------------------------------------------
-// Investigation state (prototype: kept in the browser's localStorage, no backend).
+// Investigation state. Cases live in the backend database (data/sih146.db), not in the browser.
 //
-// A flagged anomaly is only a lead. Nothing here is created automatically: a wallet's review
-// status changes and cases exist only when an investigator explicitly does it. The shapes below
-// are what a future Cases module (and a real persistence layer) would store.
+// A flagged wallet or a lead is only a lead. Nothing here is created automatically: a wallet's review
+// status changes and a case exists only when an investigator explicitly does it.
+//
+// Cases stored in this browser by earlier prototype versions (localStorage key sih146.investigation.v1)
+// were test data; they are not read, shown or migrated.
 // ---------------------------------------------------------------------------------------------
 
 /** Per-wallet workflow state shown in the anomaly table. */
 export type ReviewStatus = 'Unreviewed' | 'Under Review' | 'Case Created';
-
-/** Investigator-controlled state of a case itself. */
-export type CaseStatus = 'Open' | 'Under investigation' | 'Closed';
-
-/** Evidence as it stood when the wallet was added to the case (later pipeline re-runs do not rewrite it). */
-export interface EvidenceSnapshot {
-  mlScore: number;
-  mlPrediction: string;
-  ruleCount: number;
-  evidenceLevel: string;
-  triggeredRules: string[];
-  /** Pipeline explanation text at the time the wallet was added (absent on cases created before this was stored). */
-  findings?: string;
-  combinedScore: number;
-  priorityRank: number;
-}
-
-export interface CaseWallet {
-  address: string;
-  addedAt: string; // ISO
-  snapshot: EvidenceSnapshot;
-}
-
-export interface CaseEvent {
-  at: string; // ISO
-  actor: string;
-  action: string;
-  detail?: string;
-}
-
-export interface CaseNote {
-  id: string;
-  at: string;
-  author: string;
-  text: string;
-}
-
-export interface CaseRecord {
-  id: string; // CASE-0001
-  title: string;
-  createdAt: string; // ISO
-  status: CaseStatus;
-  wallets: CaseWallet[];
-  relatedTransactions: Transfer[];
-  notes: CaseNote[];
-  history: CaseEvent[];
-}
-
-export interface Persisted {
-  cases: CaseRecord[];
-  reviewStatus: Record<string, 'Unreviewed' | 'Under Review'>;
-}
-
-const STORAGE_KEY = 'sih146.investigation.v1';
-const ACTOR = 'Investigator'; // no authentication in the offline prototype
-
-function load(): Persisted {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const p = JSON.parse(raw) as Persisted;
-      if (Array.isArray(p.cases) && p.reviewStatus) return p;
-    }
-  } catch {
-    /* storage unavailable or corrupt: start empty */
-  }
-  return { cases: [], reviewStatus: {} };
-}
+export type { CaseStatus, CasePriority, CaseSummary, CaseDetail, ItemType };
 
 export interface NewCaseInput {
-  wallet: WalletRecord;
   title: string;
-  note: string;
-  transactions: Transfer[];
+  description?: string;
+  priority?: CasePriority | null;
+  assignedTo?: string;
+  note?: string;
+  items: { type: ItemType; id: string; note?: string }[];
 }
 
 interface Store {
-  cases: CaseRecord[];
+  /** Case management needs the backend; false in the bundled-CSV fallback. */
+  available: boolean;
+  cases: CaseSummary[];
   activeCases: number;
+  loading: boolean;
   statusOf: (walletId: string) => ReviewStatus;
-  caseFor: (walletId: string) => CaseRecord | undefined;
-  markUnderReview: (walletId: string) => void;
-  markUnreviewed: (walletId: string) => void;
-  createCase: (input: NewCaseInput) => CaseRecord;
-  getCase: (id: string) => CaseRecord | undefined;
-  setCaseStatus: (id: string, status: CaseStatus) => void;
-  addNote: (id: string, text: string) => void;
-  /** Everything the store holds, for export. */
-  snapshot: () => Persisted;
-  /** Removes all cases and review statuses (Settings > Local data). */
-  clearAll: () => void;
+  caseIdsFor: (walletId: string) => string[];
+  refresh: () => Promise<void>;
+  markUnderReview: (walletId: string) => Promise<void>;
+  markUnreviewed: (walletId: string) => Promise<void>;
+  createCase: (input: NewCaseInput) => Promise<CaseDetail>;
+  updateCase: (id: string, patch: Partial<{ title: string; description: string; status: CaseStatus; priority: CasePriority; assigned_to: string }>) => Promise<CaseDetail>;
+  addNote: (id: string, text: string) => Promise<void>;
+  markReviewed: (id: string, itemType: ItemType, itemId: string, note?: string) => Promise<void>;
+  addItem: (id: string, type: ItemType, itemId: string, note?: string) => Promise<void>;
+  removeItem: (id: string, type: ItemType, itemId: string) => Promise<void>;
 }
 
 const Ctx = createContext<Store | null>(null);
 
 export function CaseProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<Persisted>(load);
+  const backend = useBackend();
+  const { byId } = useDataset();
+  const available = backend.mode === 'api';
+  const [cases, setCases] = useState<CaseSummary[]>([]);
+  const [loading, setLoading] = useState(available);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
+    if (!available) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      /* not persisted; the session still works */
+      const page = await api.get<{ items: CaseSummary[] }>(`/api/cases${qs({ limit: 500 })}`);
+      setCases(page.items);
+    } finally {
+      setLoading(false);
     }
-  }, [state]);
+  }, [available]);
 
-  const caseFor = useCallback(
-    (walletId: string) => state.cases.find((c) => c.wallets.some((w) => w.address === walletId)),
-    [state.cases],
-  );
+  // Load on connect and again whenever the analysis data is reloaded (case and review state come with it).
+  useEffect(() => {
+    if (!available) {
+      setCases([]);
+      setLoading(false);
+      return;
+    }
+    refresh().catch(() => undefined);
+  }, [available, refresh, byId]);
 
-  const statusOf = useCallback(
-    (walletId: string): ReviewStatus => (caseFor(walletId) ? 'Case Created' : state.reviewStatus[walletId] ?? 'Unreviewed'),
-    [caseFor, state.reviewStatus],
-  );
+  const afterChange = useCallback(async () => {
+    await Promise.all([refresh(), backend.reload()]);
+  }, [refresh, backend]);
 
-  const setReview = useCallback((walletId: string, s: 'Unreviewed' | 'Under Review') => {
-    setState((p) => ({ ...p, reviewStatus: { ...p.reviewStatus, [walletId]: s } }));
-  }, []);
-
-  const createCase = useCallback(
-    (input: NewCaseInput): CaseRecord => {
-      const now = new Date().toISOString();
-      const { wallet } = input;
-      const f = wallet.fusion;
-      const record: CaseRecord = {
-        id: `CASE-${String(state.cases.length + 1).padStart(4, '0')}`,
-        title: input.title.trim() || `Review of ${wallet.id}`,
-        createdAt: now,
-        status: 'Open',
-        wallets: [
-          {
-            address: wallet.id,
-            addedAt: now,
-            snapshot: {
-              mlScore: f.ml_anomaly_score,
-              mlPrediction: f.ml_anomaly_prediction,
-              ruleCount: f.forensic_rule_count,
-              evidenceLevel: f.forensic_evidence_level,
-              triggeredRules: parseRuleNames(f.forensic_triggered_rules),
-              findings: f.forensic_findings,
-              combinedScore: f.combined_score,
-              priorityRank: wallet.priorityRank,
-            },
-          },
-        ],
-        relatedTransactions: input.transactions,
-        notes: input.note.trim()
-          ? [{ id: `n-${Date.now()}`, at: now, author: ACTOR, text: input.note.trim() }]
-          : [],
-        history: [
-          {
-            at: now,
-            actor: ACTOR,
-            action: 'Case created',
-            detail: `Opened from wallet ${wallet.id} with ${input.transactions.length} related transactions attached.`,
-          },
-        ],
-      };
-      setState((p) => ({ ...p, cases: [...p.cases, record] }));
-      return record;
+  const setReview = useCallback(
+    async (walletId: string, status: 'Unreviewed' | 'Under Review') => {
+      await api.put(`/api/wallets/${encodeURIComponent(walletId)}/review`, { status });
+      await afterChange();
     },
-    [state.cases.length],
-  );
-
-  const updateCase = useCallback((id: string, fn: (c: CaseRecord, now: string) => CaseRecord) => {
-    const now = new Date().toISOString();
-    setState((p) => ({ ...p, cases: p.cases.map((c) => (c.id === id ? fn(c, now) : c)) }));
-  }, []);
-
-  const setCaseStatus = useCallback(
-    (id: string, status: CaseStatus) =>
-      updateCase(id, (c, now) =>
-        c.status === status
-          ? c
-          : {
-              ...c,
-              status,
-              history: [...c.history, { at: now, actor: ACTOR, action: 'Status changed', detail: `${c.status} → ${status}` }],
-            },
-      ),
-    [updateCase],
-  );
-
-  const addNote = useCallback(
-    (id: string, text: string) => {
-      const t = text.trim();
-      if (!t) return;
-      updateCase(id, (c, now) => ({
-        ...c,
-        notes: [...c.notes, { id: `n-${Date.now()}`, at: now, author: ACTOR, text: t }],
-        history: [...c.history, { at: now, actor: ACTOR, action: 'Note added' }],
-      }));
-    },
-    [updateCase],
+    [afterChange],
   );
 
   const value = useMemo<Store>(
     () => ({
-      cases: state.cases,
-      activeCases: state.cases.filter((c) => c.status !== 'Closed').length,
-      statusOf,
-      caseFor,
+      available,
+      cases,
+      activeCases: backend.overview?.active_cases ?? cases.filter((c) => c.status !== 'Closed').length,
+      loading,
+      statusOf: (id) => byId.get(id)?.lead?.review ?? 'Unreviewed',
+      caseIdsFor: (id) => byId.get(id)?.lead?.caseIds ?? [],
+      refresh,
       markUnderReview: (id) => setReview(id, 'Under Review'),
       markUnreviewed: (id) => setReview(id, 'Unreviewed'),
-      createCase,
-      getCase: (id) => state.cases.find((c) => c.id === id),
-      setCaseStatus,
-      addNote,
-      snapshot: () => state,
-      clearAll: () => setState({ cases: [], reviewStatus: {} }),
+      createCase: async (input) => {
+        const created = await api.post<CaseDetail>('/api/cases', {
+          title: input.title.trim(),
+          description: input.description?.trim() || undefined,
+          priority: input.priority || undefined,
+          assigned_to: input.assignedTo?.trim() || undefined,
+          note: input.note?.trim() || undefined,
+          items: input.items,
+        });
+        await afterChange();
+        return created;
+      },
+      updateCase: async (id, patch) => {
+        const d = await api.patch<CaseDetail>(`/api/cases/${id}`, patch);
+        await afterChange();
+        return d;
+      },
+      addNote: async (id, text) => {
+        await api.post(`/api/cases/${id}/notes`, { text: text.trim() });
+        await refresh();
+      },
+      markReviewed: async (id, itemType, itemId, note) => {
+        await api.post(`/api/cases/${id}/reviews`, { item_type: itemType, item_id: itemId, note: note?.trim() || undefined });
+      },
+      addItem: async (id, type, itemId, note) => {
+        await api.post(`/api/cases/${id}/items`, { type, id: itemId, note: note?.trim() || undefined });
+        await afterChange();
+      },
+      removeItem: async (id, type, itemId) => {
+        await api.del(`/api/cases/${id}/items/${type}/${encodeURIComponent(itemId)}`);
+        await afterChange();
+      },
     }),
-    [state, statusOf, caseFor, setReview, createCase, setCaseStatus, addNote],
+    [available, cases, backend.overview, loading, byId, refresh, setReview, afterChange],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
