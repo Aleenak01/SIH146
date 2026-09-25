@@ -135,6 +135,11 @@ class OverviewOut(BaseModel):
     by_source: dict[str, dict[str, int]]
     first_transaction_at: UtcDatetime | None
     last_transaction_at: UtcDatetime | None
+    # from the latest completed analysis (null until one has run)
+    last_analysis_at: UtcDatetime | None = None
+    analysis_stale: bool = False
+    anomalous_wallets: int | None = None
+    leads_total: int | None = None
 
 
 class ErrorBody(BaseModel):
@@ -145,3 +150,107 @@ class ErrorBody(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorBody
+
+
+# ---- analysis, leads --------------------------------------------------------------------------------
+class AnalysisRunOut(BaseModel):
+    run_id: int
+    source: str
+    trigger: str
+    status: str
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None
+    transfer_count: int | None
+    wallet_count: int | None
+    error: str | None = None
+    run_config: dict | None = None
+
+
+class RunSummaryOut(BaseModel):
+    run_id: int
+    status: str
+    source: str
+    trigger: str
+    transfer_count: int
+    wallet_count: int
+    scored_wallets: int
+    unscored_wallets: int
+    anomalous_wallets: int
+    leads_total: int
+    new_leads: int
+    duration_seconds: float
+    error: str | None = None
+
+
+class FindingOut(BaseModel):
+    rule_id: str
+    rule_name: str
+    severity: str | None = None
+    feature: str | None
+    feature_value: float | None
+    threshold: float | None
+    evidence: str | None
+
+
+class LeadOut(BaseModel):
+    wallet_address: str
+    source: str
+    priority_rank: int
+    priority_level: str
+    combined_score: float
+    ml_score: float
+    ml_prediction: str
+    forensic_score: float
+    forensic_rule_count: int
+    evidence_level: str
+    reasons: list[str]
+    first_flagged_at: UtcDatetime | None
+    updated_at: UtcDatetime
+    run_id: int
+    is_case: bool = False            # a lead is not a case; becomes true only when an investigator opens one (checkpoint 5)
+
+
+class LeadPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[LeadOut]
+
+
+class RelatedWallet(BaseModel):
+    wallet_address: str
+    transfers: int
+    sent_to: int
+    received_from: int
+    total_btc: float
+    ml_prediction: str | None = None
+
+
+class LeadDetail(LeadOut):
+    contributing_evidence: dict
+    findings: list[FindingOut]
+    features: dict[str, float]
+    related_transactions: TransactionPage
+    related_wallets: list[RelatedWallet]
+    disclaimer: str
+
+
+class WalletAnalysis(BaseModel):
+    """Analysis of any wallet in the latest run (a lead or not)."""
+
+    wallet_address: str
+    scored: bool
+    unscored_reason: str | None = None
+    run_id: int | None = None
+    ml_score: float | None = None
+    ml_prediction: str | None = None
+    forensic_score: float | None = None
+    forensic_rule_count: int | None = None
+    evidence_level: str | None = None
+    combined_score: float | None = None
+    priority_rank: int | None = None
+    priority_level: str | None = None
+    is_lead: bool = False
+    findings: list[FindingOut] = Field(default_factory=list)
+    features: dict[str, float] = Field(default_factory=dict)
+    fusion_note: str

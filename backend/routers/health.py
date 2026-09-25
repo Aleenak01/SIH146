@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from .. import __version__
 from ..deps import get_session
-from ..models import Transaction, Wallet
+from ..analysis.service import analysis_is_stale, latest_run
+from ..models import AnomalyResult, InvestigativeLead, Transaction, Wallet
 from ..schemas import OverviewOut
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -28,7 +29,14 @@ def overview(session: Session = Depends(get_session)):
     for source, n in session.execute(select(Wallet.source, func.count()).group_by(Wallet.source)):
         by_source.setdefault(source, {"transactions": 0, "wallets": 0})["wallets"] = n
     first, last = session.execute(select(func.min(Transaction.timestamp), func.max(Transaction.timestamp))).one()
+    run = latest_run(session, "synthetic")
+    anomalous = leads = None
+    if run is not None:
+        anomalous = session.scalar(select(func.count()).select_from(AnomalyResult).where(AnomalyResult.run_id == run.run_id, AnomalyResult.anomaly_prediction == "Anomalous"))
+        leads = session.scalar(select(func.count()).select_from(InvestigativeLead).where(InvestigativeLead.source == "synthetic"))
     return OverviewOut(
+        last_analysis_at=run.finished_at if run else None, analysis_stale=analysis_is_stale(session, "synthetic"),
+        anomalous_wallets=anomalous, leads_total=leads,
         transactions_total=sum(v["transactions"] for v in by_source.values()),
         wallets_total=sum(v["wallets"] for v in by_source.values()),
         by_source=by_source, first_transaction_at=first, last_transaction_at=last,

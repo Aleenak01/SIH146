@@ -38,6 +38,12 @@ class Settings:
     host: str
     port: int
     cors_origins: list[str] = field(default_factory=list)
+    # Monitoring (synthetic/local): see backend/services/monitor.py
+    monitor_autostart: bool = True             # start the monitor (inbox watcher + automatic analysis) with the server
+    monitor_interval: float = 5.0              # seconds between monitor ticks (micro-batch analysis interval)
+    inbox_dir: Path = PROJECT_ROOT / "data" / "stream_inbox"
+    stream_seed: int = 146                     # seed for the synthetic stream, so a demo is reproducible
+    stream_rate_per_minute: float = 30.0
 
     @property
     def database_url(self) -> str:
@@ -53,4 +59,9 @@ def load_settings() -> Settings:
         host=env("SIH146_HOST", "127.0.0.1"),
         port=int(env("SIH146_PORT", "8000")),
         cors_origins=[o.strip() for o in env("SIH146_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()],
+        monitor_autostart=env("SIH146_MONITOR_AUTOSTART", "true").strip().lower() in ("1", "true", "yes", "on"),
+        monitor_interval=max(1.0, float(env("SIH146_MONITOR_INTERVAL", "5"))),
+        inbox_dir=_resolve(env("SIH146_INBOX_DIR", "data/stream_inbox")),
+        stream_seed=int(env("SIH146_STREAM_SEED", "146")),
+        stream_rate_per_minute=float(env("SIH146_STREAM_RATE_PER_MINUTE", "30")),
     )

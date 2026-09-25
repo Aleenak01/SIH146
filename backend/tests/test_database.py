@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.models import FEATURE_COLUMNS, Base, Transaction, Wallet
 
 EXPECTED_TABLES = {
-    "transactions", "wallets", "network_observations", "analysis_runs", "wallet_features", "anomaly_results",
+    "transactions", "wallets", "network_observations", "analysis_runs", "wallet_features", "anomaly_results", "fusion_results",
     "forensic_findings", "investigative_leads", "entity_clusters", "entity_cluster_members", "cases", "case_items",
     "case_history",
 }

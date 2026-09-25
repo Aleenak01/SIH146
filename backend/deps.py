@@ -19,6 +19,10 @@ def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
+def get_monitor(request: Request):
+    return request.app.state.monitor
+
+
 def get_session(request: Request) -> Iterator[Session]:
     session = request.app.state.db.session()
     try:

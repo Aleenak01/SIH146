@@ -1,9 +1,10 @@
 """
 Database schema (SQLAlchemy 2.x).
 
-Populated at Checkpoint 2: `wallets`, `transactions`.
+Populated so far: `wallets`, `transactions` (Checkpoint 2); `analysis_runs`, `wallet_features`, `anomaly_results`,
+`fusion_results`, `forensic_findings`, `investigative_leads` (Checkpoint 3).
 Defined now, filled by later checkpoints (schema only until then): `network_observations`,
-`analysis_runs`, `wallet_features`, `anomaly_results`, `forensic_findings`, `investigative_leads`,
+`analysis_runs`, `wallet_features`, `anomaly_results`, `fusion_results`, `forensic_findings`, `investigative_leads`,
 `entity_clusters`, `entity_cluster_members`, `cases`, `case_items`, `case_history`.
 
 Every transaction and wallet carries a `source` ('synthetic' or 'real_bitcoin') so the two are never
@@ -165,6 +166,21 @@ class AnomalyResult(Base):
     wallet_address: Mapped[str] = mapped_column(ForeignKey("wallets.address"), primary_key=True)
     anomaly_score: Mapped[float] = mapped_column(Float)          # Isolation Forest, higher = more unusual
     anomaly_prediction: Mapped[str] = mapped_column(String(16))  # 'Anomalous' / 'Normal'
+
+
+class FusionResult(Base):
+    """Database form of data/fusion_results.csv: the combined result and priority of every scored wallet."""
+
+    __tablename__ = "fusion_results"
+
+    run_id: Mapped[int] = mapped_column(ForeignKey("analysis_runs.run_id"), primary_key=True)
+    wallet_address: Mapped[str] = mapped_column(ForeignKey("wallets.address"), primary_key=True)
+    forensic_score: Mapped[float] = mapped_column(Float)          # rule_count / total rules (ml/result_fusion.py)
+    forensic_rule_count: Mapped[int] = mapped_column(Integer)
+    evidence_level: Mapped[str] = mapped_column(String(64))
+    combined_score: Mapped[float] = mapped_column(Float)          # prototype weighting, not validated
+    priority_rank: Mapped[int] = mapped_column(Integer, index=True)
+    priority_level: Mapped[str] = mapped_column(String(16))
 
 
 class ForensicFinding(Base):

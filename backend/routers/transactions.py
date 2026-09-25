@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
 from ..database import Database
-from ..deps import get_db, get_session
+from ..deps import get_db, get_monitor, get_session
 from ..errors import AppError
 from ..models import Transaction
 from ..schemas import IngestResult, RejectedItem, TransactionIn, TransactionOut, TransactionPage
@@ -52,7 +52,7 @@ def get_transaction(transaction_id: str, session: Session = Depends(get_session)
 
 
 @router.post("", response_model=TransactionOut, status_code=201)
-def create_transaction(payload: TransactionIn, db: Database = Depends(get_db)):
+def create_transaction(payload: TransactionIn, db: Database = Depends(get_db), monitor=Depends(get_monitor)):
     """
     Persist one synthetic transaction (creating its wallets if new). Transactions posted here are
     always labelled source='synthetic'; real Bitcoin data only enters through a configured source.
@@ -64,14 +64,18 @@ def create_transaction(payload: TransactionIn, db: Database = Depends(get_db)):
         if outcome.duplicates:
             raise AppError(409, "duplicate_transaction", "A transaction with this ID already exists.")
         tx = session.get(Transaction, outcome.transaction_ids[0])
-        return TransactionOut.model_validate(tx)
+        result = TransactionOut.model_validate(tx)
+    monitor.record_ingest(1, "api")          # the monitor's next cycle re-analyses (micro-batch)
+    return result
 
 
 @router.post("/batch", response_model=IngestResult)
-def create_transactions_batch(payloads: Annotated[list[Any], Body(max_length=MAX_BATCH)], db: Database = Depends(get_db)):
+def create_transactions_batch(payloads: Annotated[list[Any], Body(max_length=MAX_BATCH)], db: Database = Depends(get_db), monitor=Depends(get_monitor)):
     """Persist many synthetic transactions. Invalid items are reported by index; valid ones are still saved."""
     with db.transaction() as session:
         outcome = ingest_payloads(session, payloads, "synthetic")
+    if outcome.inserted:
+        monitor.record_ingest(outcome.inserted, "api")
     return IngestResult(
         inserted=outcome.inserted, duplicates=outcome.duplicates,
         rejected=[RejectedItem(**r) for r in outcome.rejected], transaction_ids=outcome.transaction_ids,

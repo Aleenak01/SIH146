@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from ..deps import get_session
 from ..errors import AppError
-from ..schemas import TransactionOut, TransactionPage, WalletDetail, WalletPage
+from ..schemas import TransactionOut, TransactionPage, WalletAnalysis, WalletDetail, WalletPage
+from ..services import leads as leads_service
 from ..services import queries
 
 router = APIRouter(prefix="/api/wallets", tags=["wallets"])
@@ -48,3 +49,12 @@ def wallet_transactions(
     clauses = queries.transaction_filters(wallet=address)
     total, rows = queries.list_transactions(session, clauses, sort="timestamp", order=order, limit=limit, offset=offset)
     return TransactionPage(total=total, limit=limit, offset=offset, items=[TransactionOut.model_validate(r) for r in rows])
+
+
+@router.get("/{address}/analysis", response_model=WalletAnalysis)
+def wallet_analysis(address: str, session: Session = Depends(get_session)):
+    """ML score, forensic findings, features and priority of any wallet in the latest analysis (a lead or not)."""
+    analysis = leads_service.wallet_analysis(session, address)
+    if analysis is None:
+        raise AppError(404, "not_found", f"No wallet {address!r}.")
+    return analysis

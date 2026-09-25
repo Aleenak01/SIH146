@@ -103,3 +103,13 @@ except to correct mistakes.
 5. **Dependencies:** fastapi, uvicorn, sqlalchemy, networkx (later), pytest + httpx (tests), all installed in `.venv` only.
 6. **Validation:** 90 new backend tests + the existing 11 fusion tests pass; per-wallet transaction counts in SQLite match `data/wallet_behavior_features.csv` for all 410 wallets; the four `ml/*.py` CLIs still run with identical results; live server exercised over HTTP.
 7. **Note:** on this machine importing pandas takes 5-11 s and the API about 11 s, so server start-up takes roughly 10-15 s.
+
+## 2026-09-25 – Monitoring + analysis integration (Checkpoint 3)
+
+1. **What changed:** Extended `backend/` (new `analysis/` package, monitor, inbox and synthetic-stream sources, leads/analysis/monitor endpoints, `fusion_results` table, 65 new tests). `ml/`, `generate_dataset.py`, the CSVs and the frontend were not touched. Rollback tag: `sih146-checkpoint-before-monitoring` (commit 29ffb4f).
+2. **Why:** Turn the one-shot CLI pipeline into a continuously updating service that persists results and produces ranked investigative leads.
+3. **Implemented and tested:** the existing `ml/` functions are called unchanged (features rounded to 6 dp exactly as the CLI does); results for all 410 wallets match `data/*.csv` exactly (features, ML scores/predictions, triggered rules, combined scores, rank order). Forensic findings stored per rule (value, threshold, the rule's own sentence). Fusion keeps the existing 0.4/0.6 formula, labelled "Prototype fusion weighting - not statistically validated". Priority bands (top 5% High, next 15% Medium, rest Low) are a labelled prototype setting. Lead = ML-flagged OR High band (42 on the project dataset: 41 + wallet_268). Monitor thread: inbox folder + optional synthetic stream + automatic micro-batch re-analysis; verified live with no manual trigger.
+4. **Rules of the design:** analysis is per data source (never mixed); wallets with fewer than 2 transactions are left unscored, never filled in; a failing analysis is not retried until data changes; older runs' detail rows are pruned.
+5. **Dependencies:** none added.
+6. **Validation:** 166 tests pass (155 backend + 11 existing); the four `ml/*.py` CLIs still run with identical output; live server demo on a scratch database (POST -> automatic re-analysis, inbox file, stream, demo scenario).
+7. **Caveats:** a full analysis takes about 10 s on this machine (the first also pays ~15-30 s of scikit-learn/pandas imports), so analysis is micro-batched, not per transaction. Isolation Forest always flags ~10% of wallets (contamination), so a newly anomalous wallet can push another out of the flagged set.
