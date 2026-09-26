@@ -315,5 +315,26 @@ Transactions / Network, Settings; light and dark themes authored separately.
   the monitor and Settings, keeping the original five-item navigation.
 - Risk/confidence is expressed as the prototype combined result and priority band, not a calibrated probability.
 
+## Rules for later phases
+These rules carry the design decisions of Phase 1 forward. Anything built on the rich data (entities, correlation, detectors) must follow them.
+
+1. **Leak fields.** `sender_wallet`, `receiver_wallet` and `amount_btc` exist in rich records only to build the flat view for the old wallet-level
+   pipeline. Entity, correlation and detector code must **not** read them (they name the true owner and the true payment). The ground-truth file
+   `dataset/rich/ground_truth_address_owner.csv` is for offline validation scripts and tests only, never for backend analysis. A test enforces this for
+   the analysis code that exists today, and new modules need the same test.
+2. **Two separate synthetic network layers exist and are not linked.**
+   - *Legacy layer*: per-wallet `network_observations` (IP, device, session, region; ids `obs-<tx>-S|R`). Used by the `NET-` clusters, `GET /api/network/observations`,
+     `GET /api/network/entities/...`, the infrastructure nodes of `GET /api/graph` and of the case graph, search (IPs, devices, sessions), and the UI (Related entities,
+     the Clusters tab, the transaction detail panel, the case graph option).
+   - *Flow layer* (Phase 1): `flow_records`, one row per transaction (source IP, destination node IP, ports, country, ASN, tied to the txid). Today only
+     `GET /api/transactions/{id}/details` returns it; no screen shows it.
+   - New correlation is built on `flow_records`. The legacy layer and its clusters are left as they are. Both layers are synthetic, and neither is observed traffic.
+3. **Wallet level versus address level.** The old pipeline (features, Isolation Forest, rules, fusion, leads, `TXC-`/`NET-` clusters, cases) is wallet-level. The new entity layer is
+   address-level: addresses grouped into entities. An entity is **not** the same object as a wallet or a wallet cluster and must not be presented as one.
+4. **Heuristics are indications, not proof.** Co-spending inputs (common-input ownership) and similar rules indicate *likely* common control, never proof. CoinJoin-like transactions
+   can break the co-spend heuristic, so the later CoinJoin work must be able to exclude such transactions from entity building.
+5. **Reproducibility of the rich dataset.** The committed files in `dataset/rich/` are the reference. Regenerating with a newer DB-IP monthly release gives a different dataset (different IP
+   ranges). Git may convert line endings on Windows, so byte hashes of the `dataset/rich/` files can differ after a fresh clone; parsing is unaffected.
+
 ## Credits
 IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.
