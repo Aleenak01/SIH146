@@ -31,8 +31,9 @@ Read this first:
 |---|---|
 | Synthetic dataset generator + CSV (10,000 rows, 5,000 transfers, 410 wallets, Oct 2025 – Sep 2026) | Tested implementation |
 | Feature engineering, Isolation Forest, forensic rules, result fusion (`ml/`, CLI + CSV outputs) | Tested implementation (unchanged) |
-| Backend API (FastAPI) + SQLite database, 50 endpoints | Tested implementation |
+| Backend API (FastAPI) + SQLite database, 53 endpoints, 20 tables | Tested implementation |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | Tested implementation |
+| Rich address-level model, offline GeoIP, CSV/JSON/JSONL/XML import (Phase 1, synthetic; not used by the analysis) | Tested implementation |
 | Continuous monitoring with automatic (micro-batch) analysis | Tested implementation |
 | Synthetic network metadata (IP / device / session observations) | Tested implementation |
 | Investigative leads and priority ranking | Tested implementation (prototype bands) |
@@ -103,19 +104,22 @@ An automated version of this path runs against a throw-away database and prints 
 .
 ├── .venv/                       # virtual environment (git-ignored)
 ├── dataset/synthetic_bitcoin_transactions.csv   # generated raw data (10,000 rows, 7 columns)
+├── dataset/rich/                # SYNTHETIC address-level dataset (Phase 1): jsonl, csv, samples in 4 formats, ground truth (validation only)
 ├── data/
 │   ├── wallet_behavior_features.csv   anomaly_results.csv   forensic_results.csv   fusion_results.csv
 │   ├── synthetic_network_observations.csv       # SYNTHETIC IP/device/session observations (6,489 rows)
+│   ├── geoip/                                   # DB-IP Lite country + ASN databases (CC BY 4.0), used offline
 │   └── sih146.db                                # local database (created on first run, git-ignored)
 ├── ml/                          # the original pipeline (unchanged): features, Isolation Forest, rules, fusion
 ├── generate_dataset.py          # generates and validates the raw dataset
+├── generate_rich_dataset.py     # generates dataset/rich/ (seed 149, deterministic)
 ├── backend/                     # FastAPI + SQLite platform (see architecture.md)
 │   ├── main.py  config.py  database.py  models.py  schemas.py  cli.py
 │   ├── ingestion/               # TransactionSource implementations (synthetic CSV, stream, inbox, real Bitcoin)
 │   ├── analysis/                # bridge to ml/, fusion/priority, clustering
 │   ├── services/                # ingest, monitor, leads, graph, cases, search, real source, settings
 │   ├── routers/                 # the API endpoints
-│   └── tests/                   # 331 backend tests
+│   └── tests/                   # 407 backend tests
 ├── frontend/                    # Vite + React + TypeScript investigator UI
 ├── scripts/e2e_check.py         # end-to-end check / demo
 ├── requirements.txt  requirements-dev.txt  pytest.ini  .env.example
@@ -194,6 +198,23 @@ npm run build      # type-check + production build
 Exports (CSV/JSON) are generated locally in the browser. Cases are stored in the backend database, not the
 browser (cases saved in the browser by early prototype versions were test data and are not shown or migrated).
 
+## Rich transactions, GeoIP and multi-format import (Phase 1)
+A second, **synthetic** address-level view of every transaction: txid, fee, script type, input and output addresses with amounts, and a synthetic network
+flow (client IP, node IP, ports, country, ASN). It is stored in four extra tables beside the existing model and is **not used by the analysis**: the results
+(410 wallets, 41 flagged, 42 leads, 52 clusters) are unchanged. IP addresses are randomly assigned synthetic values sampled from public ranges; they are not
+observed traffic and no real person or network did anything. Details and the field list: [dataset/rich/README.md](dataset/rich/README.md).
+```powershell
+.\.venv\Scripts\python.exe generate_rich_dataset.py             # regenerate dataset/rich/ (deterministic, seed 149; 1-2 minutes; add --verify to prove it)
+.\.venv\Scripts\python.exe -m backend.cli import-rich dataset\rich\synthetic_rich_transactions.jsonl
+.\.venv\Scripts\python.exe -m backend.cli import-rich dataset\rich\sample.xml --format xml
+```
+Formats: **CSV** (list fields as JSON arrays in the cells), **JSON** (array or `{"transactions": [...]}`), **JSONL** and **XML** (DTDs and entities are rejected).
+API: `POST /api/import/rich?format=csv|json|jsonl|xml` (raw body, max 30 MB), `GET /api/transactions/{id}/details`, `GET /api/geoip/status`. Import attaches the
+detail to the existing transaction (nothing is duplicated), is idempotent, and reports rejected records one by one.
+
+**GeoIP credit: IP geolocation by DB-IP.com** (https://db-ip.com), DB-IP Lite country and ASN databases, licensed CC BY 4.0 (`data/geoip/`, see `data/geoip/ATTRIBUTION.txt`).
+The files are used offline; if they are missing the app still works and lookups return empty values.
+
 ## Optional real Bitcoin source
 Off by default; the platform never needs it. It reads recent confirmed blocks from an Esplora-compatible public
 API (default `https://blockstream.info/api`, read-only requests) and stores them with `source = real_bitcoin`,
@@ -212,7 +233,7 @@ shares its timestamp, so read several blocks for meaningful timing. The UI shows
 
 ## Tests
 ```powershell
-.\.venv\Scripts\python.exe -m pytest        # 342 tests (331 backend + 11 pipeline); ~10 minutes
+.\.venv\Scripts\python.exe -m pytest        # 418 tests (407 backend + 11 pipeline); ~10-20 minutes
 .\.venv\Scripts\python.exe scripts\e2e_check.py
 cd frontend; npm run build
 ```

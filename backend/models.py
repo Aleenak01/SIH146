@@ -327,3 +327,70 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# --------------------------------------------------------------------------------------------
+# Rich transaction model (Phase 1). All additive: the tables above are untouched. Everything here is SYNTHETIC.
+# --------------------------------------------------------------------------------------------
+RICH_SCRIPT_TYPES = ("p2pkh", "p2sh", "p2wpkh", "p2wsh", "p2tr")
+
+
+class TxDetails(Base):
+    """Address-level detail of one transaction: its txid, fee and script type. The inputs, outputs and network flow hang off it."""
+
+    __tablename__ = "tx_details"
+
+    detail_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), unique=True)
+    txid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    fee_btc: Mapped[float] = mapped_column(Float)
+    script_type: Mapped[str] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(16), default="synthetic")
+
+    __table_args__ = (
+        CheckConstraint("fee_btc >= 0", name="ck_tx_details_fee"),
+        CheckConstraint("script_type IN ('p2pkh', 'p2sh', 'p2wpkh', 'p2wsh', 'p2tr')", name="ck_tx_details_script"),
+    )
+
+
+class TxInput(Base):
+    __tablename__ = "tx_inputs"
+
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    address: Mapped[str] = mapped_column(String(128), index=True)
+    amount_btc: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (CheckConstraint("amount_btc > 0", name="ck_tx_inputs_amount"),)
+
+
+class TxOutput(Base):
+    __tablename__ = "tx_outputs"
+
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    address: Mapped[str] = mapped_column(String(128), index=True)
+    amount_btc: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (CheckConstraint("amount_btc > 0", name="ck_tx_outputs_amount"),)
+
+
+class FlowRecord(Base):
+    """
+    SYNTHETIC network flow of a transaction: which (randomly assigned) client IP sent it to which (synthetic) node IP and on
+    which ports. geo_country / asn / asn_org describe src_ip (DB-IP Lite lookup). Not observed traffic.
+    """
+
+    __tablename__ = "flow_records"
+
+    flow_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), unique=True)
+    src_ip: Mapped[str | None] = mapped_column(String(64), index=True)
+    dst_ip: Mapped[str | None] = mapped_column(String(64), index=True)
+    src_port: Mapped[int | None] = mapped_column(Integer)
+    dst_port: Mapped[int | None] = mapped_column(Integer)
+    geo_country: Mapped[str | None] = mapped_column(String(2))
+    asn: Mapped[int | None] = mapped_column(Integer, index=True)
+    asn_org: Mapped[str | None] = mapped_column(String(200))
+    is_synthetic: Mapped[bool] = mapped_column(Boolean, default=True)
+    origin: Mapped[str] = mapped_column(String(48), default="synthetic_flow_record")

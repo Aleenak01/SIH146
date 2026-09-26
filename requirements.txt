@@ -12,3 +12,7 @@ sqlalchemy==2.1.0
 
 # Graph clustering (community detection)
 networkx==3.7
+
+# GeoIP lookups (offline MMDB files from DB-IP Lite) and safe XML parsing for the rich-transaction importer
+maxminddb==3.2.0
+defusedxml==0.7.1

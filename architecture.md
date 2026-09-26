@@ -20,8 +20,9 @@ fraudulent activity. A lead is not a case: only an investigator creates cases.
 | Isolation Forest (`ml/anomaly_detection.py`) and `data/anomaly_results.csv` | **Implemented** |
 | Forensic behavioural rules (`ml/forensic_rules.py`) and `data/forensic_results.csv` | **Implemented** |
 | Result fusion (`ml/result_fusion.py`) and `data/fusion_results.csv` | **Implemented** (prototype weights, not validated) |
-| Backend API (FastAPI, 50 endpoints) and SQLite database (16 tables) | **Implemented** |
+| Backend API (FastAPI, 53 endpoints) and SQLite database (20 tables) | **Implemented** |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | **Implemented** |
+| Rich transaction model, offline GeoIP and CSV/JSON/JSONL/XML ingestion (Phase 1) | **Implemented** (synthetic; not used by the analysis) |
 | Continuous monitoring with automatic micro-batch analysis | **Implemented** |
 | Synthetic network metadata (IP / device / session observations) | **Implemented** |
 | Investigative leads and priority ranking | **Implemented** (prototype bands) |
@@ -174,10 +175,11 @@ Known threshold caveats (feature definitions were not changed):
 Layout: `backend/ingestion` (sources), `backend/analysis` (bridge, fusion/priority, clustering), `backend/services`
 (ingest, monitor, leads, graph, cases, search, settings, real source), `backend/routers` (endpoints), `backend/tests`.
 
-**Tables (16):** `transactions`, `wallets` (both carry `source` = `synthetic` or `real_bitcoin`), `network_observations`
+**Tables (20):** `transactions`, `wallets` (both carry `source` = `synthetic` or `real_bitcoin`), `network_observations`
 (synthetic), `analysis_runs`, `wallet_features`, `anomaly_results`, `fusion_results`, `forensic_findings`,
 `investigative_leads`, `entity_clusters`, `entity_cluster_members`, `wallet_reviews`, `cases`, `case_items`,
-`case_history`, `app_settings`. Tables are created additively; existing data is never dropped by start-up.
+`case_history`, `app_settings`, and the four rich-model tables `tx_details`, `tx_inputs`, `tx_outputs`, `flow_records` (see below). Tables are created
+additively; existing data is never dropped by start-up.
 
 **Sources and normalization.** Every source implements `TransactionSource` and yields the same normalized object
 (`SourcedTransaction`, wrapping `TransactionIn`: id, UTC time, sender, receiver, amount ≥ 1 satoshi, input/output counts).
@@ -231,6 +233,45 @@ start-up. The real source is configured only through environment variables. No c
 **Errors and safety.** Uniform error body `{"error": {"code", "message", "details"?}}`; parameterized SQL; text search is
 escaped; the server binds to 127.0.0.1; CORS is limited to the local dev origins; `.env` and the database are git-ignored.
 
+## Rich transaction model (Phase 1)
+Status: **Implemented** (data model, GeoIP, four-format ingestion, enrichment import). Everything in it is **synthetic**. It is stored beside the
+existing model and is not read by `ml/` or by the analysis; no result changed (410 wallets, 41 flagged, 42 leads, 52 clusters, and the pipeline CSVs are
+value-identical, also after importing the whole rich dataset).
+
+**New tables (additive; no existing table or column changed):** `tx_details` (one row per detailed transaction: unique `txid`, fee, script type),
+`tx_inputs` and `tx_outputs` (address, amount, position), `flow_records` (synthetic network flow: `src_ip`, `dst_ip`, ports, `geo_country`, `asn`,
+`asn_org`, `is_synthetic`, `origin = synthetic_flow_record`). All reference `transactions.transaction_id`; indexes on txid, address, src_ip, dst_ip, asn.
+Replacing the synthetic data (`purge_source`) removes these rows first, so that flow keeps working.
+
+**Rich dataset** (`generate_rich_dataset.py`, seed 149, output in `dataset/rich/`): one record per existing transfer (5,000), same order and same
+`syn-` ids. Opaque synthetic addresses (1,284, each wallet owns 1-4), exact value balance in satoshis (inputs = outputs + fee), a payment to the
+receiver plus change to unspent addresses of the sender, 17% of transactions spending 2-3 different addresses of one sender, a synthetic network flow
+(client IPs from a pool per wallet, 15% of wallets sharing an IP, 8 node IPs, ephemeral source ports, destination port 8333 in 90%), and country / ASN
+from a real GeoIP lookup. Flattening every record to (timestamp, sender wallet, receiver wallet, `amount_btc`, input count, output count) reproduces the
+original 5,000 transfers exactly. `sender_wallet`, `receiver_wallet`, `amount_btc` and `ground_truth_address_owner.csv` exist only for that flat view and
+for validation: **later detectors must not use them**. IP addresses are randomly assigned synthetic values sampled from public ranges; they are not
+observed traffic and no real person or network did anything.
+
+**GeoIP** (`backend/services/geoip.py`): offline lookups from the DB-IP Lite country and ASN databases in `data/geoip/` (MMDB, `maxminddb`). Opened
+lazily and cached; if the files are missing or unreadable, lookups return empty values and `GET /api/geoip/status` says so. Private, reserved and
+documentation addresses are never looked up. **IP geolocation by DB-IP.com** (https://db-ip.com), licensed CC BY 4.0; see `data/geoip/ATTRIBUTION.txt`.
+
+**Formats** (`backend/ingestion/rich_formats.py`): CSV (list fields as JSON arrays in the cells), JSON (array or `{"transactions": [...]}`), JSONL and XML
+(`<transactions><transaction>...`, parsed with `defusedxml`: DTDs, entities and external references are rejected). Every record is validated by one model:
+64-hex `txid`, UTC timestamp, fee >= 0, script type in the allowed set, non-empty address and amount lists of equal length, amounts >= 1 satoshi, value
+balance within 1 satoshi, valid IPs, ports 0-65535. Bodies are limited to 30 MB and 20,000 records.
+
+**Enrichment import** (`backend/services/rich_import.py`; CLI `python -m backend.cli import-rich <file> [--format ...]`, API `POST /api/import/rich?format=...`):
+a record that names an existing `legacy_transaction_id` gets its detail rows attached (the flat transaction is never duplicated); a record without one is first
+created through the existing ingest function (source `synthetic`, without legacy network observations) and then detailed. De-duplicated by `txid`, so
+re-importing changes nothing; a txid that returns with different content is rejected, not overwritten; a record that contradicts the stored transaction
+(sender, receiver, amount, timestamp) is rejected. Like `/api/transactions/batch`: each record is checked on its own and rejected ones are reported by
+index, the valid ones are saved together in one database transaction. Missing geo fields are filled from the lookup; provided ones are kept and any
+difference from the lookup is reported as a warning. Read endpoints: `GET /api/transactions/{id}/details`, `GET /api/geoip/status`.
+
+Not built in this phase: address-level correlation or entity graph, common-input-ownership clustering, peeling-chain / CoinJoin / risk detectors, a
+confidence score, transaction-level anomaly scoring, UI for any of it, and changes to the monitor or inbox.
+
 ## Optional: real Bitcoin source
 `backend/ingestion/real_bitcoin.py` (`RealBitcoinSource`, `EsploraClient`) reads recent confirmed blocks from an
 Esplora-compatible API. **Off** unless `SIH146_REAL_BITCOIN_ENABLED=true`; even then it only runs when a fetch is requested
@@ -273,3 +314,6 @@ Transactions / Network, Settings; light and dark themes authored separately.
 - "Investigative Leads" and "Data Ingestion" are not separate top-level screens: leads are inside Anomalies, ingestion is driven by
   the monitor and Settings, keeping the original five-item navigation.
 - Risk/confidence is expressed as the prototype combined result and priority band, not a calibrated probability.
+
+## Credits
+IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.

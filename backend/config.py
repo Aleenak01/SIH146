@@ -55,6 +55,9 @@ class Settings:
     real_bitcoin_request_delay: float = 0.3         # seconds between requests (be polite to public APIs)
     real_bitcoin_max_blocks: int = 5                # most blocks one fetch may read
     real_bitcoin_max_tx_per_block: int = 500        # most transactions read from each block
+    # GeoIP (DB-IP Lite, CC BY 4.0): offline lookups for IP address -> country / ASN. Optional: without the files lookups return empty.
+    geoip_country_db: Path = PROJECT_ROOT / "data" / "geoip" / "dbip-country-lite.mmdb"
+    geoip_asn_db: Path = PROJECT_ROOT / "data" / "geoip" / "dbip-asn-lite.mmdb"
 
     @property
     def database_url(self) -> str:
@@ -84,4 +87,6 @@ def load_settings() -> Settings:
         real_bitcoin_request_delay=max(0.0, float(env("SIH146_REAL_BITCOIN_REQUEST_DELAY", "0.3"))),
         real_bitcoin_max_blocks=max(1, int(env("SIH146_REAL_BITCOIN_MAX_BLOCKS", "5"))),
         real_bitcoin_max_tx_per_block=max(1, int(env("SIH146_REAL_BITCOIN_MAX_TX_PER_BLOCK", "500"))),
+        geoip_country_db=_resolve(env("SIH146_GEOIP_COUNTRY_DB", "data/geoip/dbip-country-lite.mmdb")),
+        geoip_asn_db=_resolve(env("SIH146_GEOIP_ASN_DB", "data/geoip/dbip-asn-lite.mmdb")),
     )

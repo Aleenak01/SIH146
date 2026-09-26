@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     fr.add_argument("--blocks", type=int, default=1, help="how many of the newest blocks to read (default 1)")
     fr.add_argument("--heights", type=int, nargs="+", help="explicit block heights instead of the newest blocks")
     fr.add_argument("--max-tx-per-block", type=int, default=None, help="most transactions to read from each block")
+    ir = sub.add_parser("import-rich", help="import rich (address-level) SYNTHETIC transaction records from a CSV / JSON / JSONL / XML file")
+    ir.add_argument("path", help="file to import")
+    ir.add_argument("--format", choices=["csv", "json", "jsonl", "xml"], default=None, help="file format (default: from the file extension)")
     an = sub.add_parser("analyze", help="run the analysis for one data source now")
     an.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     sub.add_parser("stats", help="show what the database holds")
@@ -71,6 +74,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Read {r['transactions_examined']} real transactions from {len(r['blocks'])} block(s) "
                   f"(heights {', '.join(str(b['height']) for b in r['blocks'])}) with {r['requests']} API requests.")
             print(f"Stored {r['inserted']} transfers as source=real_bitcoin ({r['duplicates']} already present, {r['rejected']} rejected). Skipped: {r['skipped'] or 'none'}.")
+        elif args.command == "import-rich":
+            from pathlib import Path
+
+            from .ingestion.rich_formats import FormatError, parse, validate_records
+            from .services.geoip import GeoIP
+            from .services.rich_import import import_rich
+
+            path = Path(args.path)
+            fmt = args.format or path.suffix.lstrip(".").lower()
+            try:
+                raw, parse_rejected = parse(path.read_bytes(), fmt)
+            except (FormatError, OSError) as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 1
+            valid, invalid = validate_records(raw)
+            res = import_rich(db, valid, GeoIP.from_settings(settings), received=len(raw) + len(parse_rejected), rejected=list(parse_rejected) + invalid)
+            print(f"{res.received} records read from {path.name} ({fmt}): {res.attached} attached to existing transactions, {res.created} transactions created, "
+                  f"{res.duplicates} already imported, {len(res.rejected)} rejected, {len(res.warnings)} warnings. tx_details now holds {res.details_total} rows.")
+            for r in sorted(res.rejected, key=lambda r: r["index"])[:10]:
+                print(f"  rejected #{r['index']}: {r['error']}")
+            print("Synthetic data: IP addresses are randomly assigned, not observed traffic.")
         elif args.command == "analyze":
             from .analysis.ml_bridge import AnalysisError
             from .analysis.service import run_analysis

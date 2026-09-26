@@ -1,0 +1,22 @@
+IP geolocation by DB-IP.com  (https://db-ip.com)
+
+The two files in this folder are the free "Lite" databases published by DB-IP.com:
+
+  dbip-country-lite.mmdb   IP to Country Lite, MMDB format   (8,340,464 bytes uncompressed; database built 2026-09-01)
+  dbip-asn-lite.mmdb       IP to ASN Lite, MMDB format       (9,511,026 bytes uncompressed; database built 2026-09-01)
+
+Downloaded on 2026-09-27 from
+  https://download.db-ip.com/free/dbip-country-lite-2026-09.mmdb.gz
+  https://download.db-ip.com/free/dbip-asn-lite-2026-09.mmdb.gz
+(links taken from https://db-ip.com/db/download/ip-to-country-lite and https://db-ip.com/db/download/ip-to-asn-lite;
+no account was needed). The .gz files were decompressed; the content is unmodified.
+
+License: Creative Commons Attribution 4.0 International (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/
+Required attribution: "IP geolocation by DB-IP.com" with a link to https://db-ip.com
+
+How this project uses them: offline lookups (backend/services/geoip.py) of country and autonomous system for the IP addresses in the
+synthetic "rich" transaction records. Those IP addresses are randomly assigned synthetic values sampled from public ranges; they are
+not observed traffic, and a lookup result says only where an address range is registered.
+
+The databases are updated monthly by DB-IP.com. To refresh them, download the newer files and replace the two .mmdb files.
+Regenerating dataset/rich/ with newer files can change which ranges exist, so the generated dataset may then differ.
