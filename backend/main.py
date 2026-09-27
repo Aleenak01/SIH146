@@ -2,7 +2,8 @@
 FastAPI application factory.
 
 Run locally from the project root:
-    .\\.venv\\Scripts\\python.exe -m backend            (serves http://127.0.0.1:8000, docs at /docs)
+    Windows:      .\\.venv\\Scripts\\python.exe -m backend   (serves http://127.0.0.1:8000, docs at /docs)
+    Linux/macOS:  ./.venv/bin/python -m backend
 """
 
 from __future__ import annotations

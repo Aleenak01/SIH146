@@ -1,7 +1,9 @@
 """
 Command-line helpers.
 
-    .\\.venv\\Scripts\\python.exe -m backend.cli init-db
+    Windows:      .\\.venv\\Scripts\\python.exe -m backend.cli init-db
+    Linux/macOS:  ./.venv/bin/python -m backend.cli init-db
+
     .\\.venv\\Scripts\\python.exe -m backend.cli import-csv [--replace]
     .\\.venv\\Scripts\\python.exe -m backend.cli stats
 """

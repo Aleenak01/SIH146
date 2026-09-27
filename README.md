@@ -82,6 +82,54 @@ Command line equivalents:
 .\.venv\Scripts\python.exe -m backend.cli stats
 ```
 
+## Quick start (Linux / macOS)
+Requirements: Python 3.14 (a `.venv` is expected in the project root) and Node.js with npm. Every command below is
+the exact same underlying command as the Windows section above; only the venv path convention differs
+(`.venv/bin/python` instead of `.venv\Scripts\python.exe`). Nothing in the codebase is Windows-only — this project
+runs unchanged on Linux and macOS.
+
+Four scripts wrap the commands below for convenience (`scripts/setup.sh`, `scripts/run_backend.sh`,
+`scripts/run_frontend.sh`, `scripts/run_tests.sh`); run with `bash scripts/<name>.sh` or, after
+`chmod +x scripts/*.sh`, with `./scripts/<name>.sh`.
+
+```bash
+python3 -m venv .venv                               # only if .venv does not exist
+./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+cd frontend && npm install && cd ..
+```
+(equivalent: `bash scripts/setup.sh`)
+
+Terminal 1 — the backend (http://127.0.0.1:8000, interactive API docs at `/docs`):
+```bash
+./.venv/bin/python -m backend
+```
+(equivalent: `bash scripts/run_backend.sh`)
+
+Terminal 2 — the UI (http://localhost:5173; add `-- --host` to `npm run dev` to also serve it to a phone on the same network):
+```bash
+cd frontend
+npm run dev
+```
+(equivalent: `bash scripts/run_frontend.sh`)
+
+The first time, the app shows an "Offline mode" banner with **Load synthetic demo data**: it imports the
+synthetic transactions and network observations and runs the analysis (about 30 seconds). Everything is
+stored in `data/sih146.db` (git-ignored). If the backend is not running, the UI still opens and shows the
+bundled pipeline CSVs read-only (no cases, clusters or monitoring).
+
+Command line equivalents:
+```bash
+./.venv/bin/python -m backend.cli init-db
+./.venv/bin/python -m backend.cli import-csv [--replace]     # synthetic transactions (safe to repeat)
+./.venv/bin/python -m backend.cli import-network             # synthetic IP/device/session observations + clusters
+./.venv/bin/python -m backend.cli analyze                    # run the analysis now
+./.venv/bin/python -m backend.cli stats
+```
+Every other command in this README (`ml/*.py`, `generate_dataset.py`, `generate_rich_dataset.py`, the Phase 2-4
+`backend.cli` subcommands, `pytest`, `scripts/e2e_check.py`) follows the same translation: replace
+`.\.venv\Scripts\python.exe` with `./.venv/bin/python` and backslash path separators (`ml\feature_engineering.py`,
+`dataset\rich\...`) with forward slashes (`ml/feature_engineering.py`, `dataset/rich/...`).
+
 ## Demo walkthrough (about 5 minutes)
 1. Start both servers; load the demo data if asked. **Dashboard:** transactions, wallets, anomalies, leads,
    active cases (0), clusters, and the monitoring strip ("Synthetic dataset — no real blockchain data is being monitored").
@@ -101,6 +149,7 @@ An automated version of this path runs against a throw-away database and prints 
 ```powershell
 .\.venv\Scripts\python.exe scripts\e2e_check.py
 ```
+Linux / macOS: `./.venv/bin/python scripts/e2e_check.py` (or `bash scripts/run_tests.sh`, which also runs the full test suite first).
 
 ## Project structure
 ```
@@ -125,6 +174,7 @@ An automated version of this path runs against a throw-away database and prints 
 │   └── tests/                   # 480 backend tests
 ├── frontend/                    # Vite + React + TypeScript investigator UI
 ├── scripts/e2e_check.py         # end-to-end check / demo
+├── scripts/*.sh                 # Linux / macOS setup + run + test scripts (Windows: use the .venv\Scripts\... commands directly)
 ├── requirements.txt  requirements-dev.txt  pytest.ini  .env.example
 ├── README.md   architecture.md   session.md
 ```
@@ -314,10 +364,13 @@ shares its timestamp, so read several blocks for meaningful timing. The UI shows
 
 ## Tests
 ```powershell
-.\.venv\Scripts\python.exe -m pytest        # 491 tests (480 backend + 11 pipeline); ~15-30 minutes
+.\.venv\Scripts\python.exe -m pytest        # 525 tests (514 backend + 11 pipeline); ~15-30 minutes
 .\.venv\Scripts\python.exe scripts\e2e_check.py
 cd frontend; npm run build
 ```
+Linux / macOS: `./.venv/bin/python -m pytest && ./.venv/bin/python scripts/e2e_check.py && (cd frontend && npm run build)`,
+or `bash scripts/run_tests.sh` for the first two.
+
 No test needs the internet. If a run looks stuck on a laptop, check that the machine did not go to sleep.
 
 ## Known limitations
@@ -330,5 +383,6 @@ No test needs the internet. If a run looks stuck on a laptop, check that the mac
 - Real-data features come from a small slice of the chain and are for demonstrating the adapter, not for conclusions.
 
 ## More information
+- Short technical write-up (a few pages, the approach at a glance): [TECHNICAL_REPORT.md](TECHNICAL_REPORT.md)
 - Technical architecture, data model, ML pipeline, API and design decisions: [architecture.md](architecture.md)
 - Development history and checkpoint log: [session.md](session.md)
