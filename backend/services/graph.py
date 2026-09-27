@@ -63,6 +63,36 @@ def parse_csv_param(value: str | None, allowed: tuple[str, ...], name: str) -> s
     return items
 
 
+def wallet_neighbor_links(session: Session, frontier: set[str], known: set[str]) -> dict[str, Counter]:
+    """
+    For every wallet outside `known` that has at least one transfer (either direction) to/from a wallet in
+    `frontier`, {candidate_wallet: Counter({frontier_wallet: transfer_count})} -- the breakdown of which frontier
+    wallet(s) it is linked through, and how many transfers each link represents.
+
+    Shared by this module's wallet-graph expansion (below) and analysis/risk_propagation.py, so both walk the
+    wallet transfer graph exactly the same way instead of two independent implementations.
+    """
+    links: dict[str, Counter] = defaultdict(Counter)
+    for snd, rcv in session.execute(select(Transaction.sender_wallet, Transaction.receiver_wallet).where(
+            or_(Transaction.sender_wallet.in_(frontier), Transaction.receiver_wallet.in_(frontier)))):
+        for a, b in ((snd, rcv), (rcv, snd)):
+            if a in frontier and b not in known:
+                links[b][a] += 1
+    return links
+
+
+def _wallet_link_totals(by_candidate: dict[str, Counter]) -> Counter:
+    """
+    Aggregate transfer count per candidate, built up in the same first-seen order as `wallet_neighbor_links` produced
+    them -- so `Counter.most_common()`'s tie-break (insertion order) is identical to what build_graph computed before
+    this helper existed. A pure extraction, not a behaviour change.
+    """
+    total: Counter = Counter()
+    for candidate, per_parent in by_candidate.items():
+        total[candidate] = sum(per_parent.values())
+    return total
+
+
 def build_graph(session: Session, req: GraphRequest) -> GraphOut:
     node_types = set(req.node_types) | {"wallet"}
     max_nodes = min(req.max_nodes, HARD_MAX_NODES)
@@ -99,12 +129,7 @@ def build_graph(session: Session, req: GraphRequest) -> GraphOut:
     for _ in range(max(0, req.depth)):
         if not frontier:
             break
-        links: Counter = Counter()
-        for snd, rcv in session.execute(select(Transaction.sender_wallet, Transaction.receiver_wallet).where(
-                or_(Transaction.sender_wallet.in_(frontier), Transaction.receiver_wallet.in_(frontier)))):
-            for a, b in ((snd, rcv), (rcv, snd)):
-                if a in frontier and b not in known:
-                    links[b] += 1
+        links = _wallet_link_totals(wallet_neighbor_links(session, frontier, known))
         added = []
         for w, _n in links.most_common():
             if len(wallets) >= max_nodes:

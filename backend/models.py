@@ -480,3 +480,62 @@ class CorrelationFinding(Base):
     evidence: Mapped[dict] = mapped_column(JSON)
     source: Mapped[str] = mapped_column(String(16), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --------------------------------------------------------------------------------------------
+# Pattern detectors (Phase 3, Part A): peeling chains and CoinJoin-like candidates. Additive; nothing above is
+# touched. Peeling is built from the existing flat `transactions` table; CoinJoin detection is built from the rich
+# address-level tables above. Both are heuristic flags -- investigative signals, never proof of anything.
+# --------------------------------------------------------------------------------------------
+class PeelingChain(Base):
+    """
+    A peeling chain: a sequence of wallet-level transfers A0 -> A1 -> ... -> An where each hop forwards most of what
+    the previous hop just delivered (see analysis/peeling.py for the exact rule and its threshold). A heuristic
+    pattern (large, repeated "change"), never proof of layering or laundering.
+    """
+
+    __tablename__ = "peeling_chains"
+
+    chain_id: Mapped[str] = mapped_column(String(80), primary_key=True)     # 'PEEL-<the chain's first transaction_id>'
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    start_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    end_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    hop_count: Mapped[int] = mapped_column(Integer)
+    total_btc_start: Mapped[float] = mapped_column(Float)
+    total_btc_end: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    hops: Mapped[list["PeelingChainHop"]] = relationship(back_populates="chain", cascade="all, delete-orphan", order_by="PeelingChainHop.hop_index")
+
+
+class PeelingChainHop(Base):
+    __tablename__ = "peeling_chain_hops"
+
+    chain_id: Mapped[str] = mapped_column(ForeignKey("peeling_chains.chain_id"), primary_key=True)
+    hop_index: Mapped[int] = mapped_column(Integer, primary_key=True)          # 1-based: hop 1 is the chain's first transfer
+    from_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    to_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"))
+    amount_btc: Mapped[float] = mapped_column(Float)
+
+    chain: Mapped[PeelingChain] = relationship(back_populates="hops")
+
+
+class CoinJoinCandidate(Base):
+    """
+    A transaction whose rich (address-level) data looks like a CoinJoin: several distinct input addresses spent
+    together with several outputs of about the same value. A heuristic candidate flag, never a certainty (see
+    analysis/coinjoin.py). Transactions flagged here are excluded from the common-input-ownership union-find in
+    analysis/entities.py, since pooling several independent people's inputs is the whole point of a CoinJoin.
+    """
+
+    __tablename__ = "coinjoin_candidates"
+
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    input_count: Mapped[int] = mapped_column(Integer)             # distinct input addresses
+    output_count: Mapped[int] = mapped_column(Integer)            # distinct output addresses
+    equal_output_group_size: Mapped[int] = mapped_column(Integer)  # size of the largest near-equal-value output group
+    equal_output_value: Mapped[float] = mapped_column(Float)      # that group's representative (lowest) value
+    score: Mapped[float] = mapped_column(Float)                   # 0-1 heuristic confidence; see analysis/coinjoin.py
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

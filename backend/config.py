@@ -58,6 +58,16 @@ class Settings:
     # GeoIP (DB-IP Lite, CC BY 4.0): offline lookups for IP address -> country / ASN. Optional: without the files lookups return empty.
     geoip_country_db: Path = PROJECT_ROOT / "data" / "geoip" / "dbip-country-lite.mmdb"
     geoip_asn_db: Path = PROJECT_ROOT / "data" / "geoip" / "dbip-asn-lite.mmdb"
+    # Pattern detectors (Phase 3 Part A): peeling chains and CoinJoin-like transactions. Prototype heuristics, not
+    # statistically validated -- same status as fusion.py's HIGH_SHARE/MEDIUM_SHARE bands, but overridable here.
+    peeling_dominance_share: float = 0.85      # a hop must forward at least this share of what it just received
+    peeling_min_hops: int = 3                  # a chain needs at least this many forwarding transfers to be stored
+    coinjoin_min_inputs: int = 3               # minimum distinct input addresses to be a CoinJoin-like candidate
+    coinjoin_min_equal_outputs: int = 3        # minimum outputs of (near) equal value to be a CoinJoin-like candidate
+    coinjoin_equal_value_tolerance: float = 0.01     # two output amounts count as "equal" within this fraction of each other
+    risk_decay_per_hop: float = 0.5            # propagated score multiplier per hop from a seed wallet (on-demand, not stored)
+    risk_max_hops: int = 4
+    risk_max_nodes: int = 200
 
     @property
     def database_url(self) -> str:
@@ -89,4 +99,12 @@ def load_settings() -> Settings:
         real_bitcoin_max_tx_per_block=max(1, int(env("SIH146_REAL_BITCOIN_MAX_TX_PER_BLOCK", "500"))),
         geoip_country_db=_resolve(env("SIH146_GEOIP_COUNTRY_DB", "data/geoip/dbip-country-lite.mmdb")),
         geoip_asn_db=_resolve(env("SIH146_GEOIP_ASN_DB", "data/geoip/dbip-asn-lite.mmdb")),
+        peeling_dominance_share=max(0.0, min(1.0, float(env("SIH146_PEELING_DOMINANCE_SHARE", "0.85")))),
+        peeling_min_hops=max(1, int(env("SIH146_PEELING_MIN_HOPS", "3"))),
+        coinjoin_min_inputs=max(2, int(env("SIH146_COINJOIN_MIN_INPUTS", "3"))),
+        coinjoin_min_equal_outputs=max(2, int(env("SIH146_COINJOIN_MIN_EQUAL_OUTPUTS", "3"))),
+        coinjoin_equal_value_tolerance=max(0.0, float(env("SIH146_COINJOIN_EQUAL_VALUE_TOLERANCE", "0.01"))),
+        risk_decay_per_hop=max(0.01, min(1.0, float(env("SIH146_RISK_DECAY_PER_HOP", "0.5")))),
+        risk_max_hops=max(1, int(env("SIH146_RISK_MAX_HOPS", "4"))),
+        risk_max_nodes=max(1, int(env("SIH146_RISK_MAX_NODES", "200"))),
     )

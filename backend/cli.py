@@ -43,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     be = sub.add_parser("build-entities", help="build common-input-ownership address entities and network correlation from the rich (address-level) SYNTHETIC data (Phase 2)")
     be.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
+    dp = sub.add_parser("detect-patterns", help="detect peeling chains (flat transactions) and CoinJoin-like transactions (rich data) (Phase 3)")
+    dp.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     sub.add_parser("stats", help="show what the database holds")
     args = parser.parse_args(argv)
 
@@ -120,6 +122,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Entities: {er.entities} ({er.created} created, {er.updated} updated, {er.removed} removed), {er.addresses_total} addresses.")
                 print(f"Correlation: {cr.entity_ip_links} entity-IP links, {cr.entity_links} entity-entity links, {cr.findings} findings.")
                 print("Synthetic data: this is a possible-link indicator from generated demo network data, not proof of anything.")
+        elif args.command == "detect-patterns":
+            from .analysis.coinjoin import refresh_coinjoin
+            from .analysis.peeling import refresh_peeling
+
+            pr = refresh_peeling(db, args.source, dominance_share=settings.peeling_dominance_share, min_hops=settings.peeling_min_hops)
+            cj = refresh_coinjoin(db, args.source, min_inputs=settings.coinjoin_min_inputs, min_equal_outputs=settings.coinjoin_min_equal_outputs,
+                                  tolerance=settings.coinjoin_equal_value_tolerance)
+            print(f"Peeling chains: {pr.chains} ({pr.hops} hops total, longest {pr.longest_chain} hops).")
+            print(f"CoinJoin-like candidates: {cj.candidates} (of {cj.examined} rich transactions examined).")
+            print("Both are heuristic signals, never proof. Re-run `build-entities` afterwards so CoinJoin-like transactions are excluded from common-input-ownership entities.")
         elif args.command == "stats":
             with db.session() as s:
                 print(f"Database: {settings.db_path}")

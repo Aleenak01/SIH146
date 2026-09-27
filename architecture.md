@@ -20,10 +20,11 @@ fraudulent activity. A lead is not a case: only an investigator creates cases.
 | Isolation Forest (`ml/anomaly_detection.py`) and `data/anomaly_results.csv` | **Implemented** |
 | Forensic behavioural rules (`ml/forensic_rules.py`) and `data/forensic_results.csv` | **Implemented** |
 | Result fusion (`ml/result_fusion.py`) and `data/fusion_results.csv` | **Implemented** (prototype weights, not validated) |
-| Backend API (FastAPI, 57 endpoints) and SQLite database (25 tables) | **Implemented** |
+| Backend API (FastAPI, 61 endpoints) and SQLite database (28 tables) | **Implemented** |
 | Common-input-ownership address entities + network correlation (Phase 2, synthetic) | **Implemented** (no UI yet; separate from the wallet-level pipeline) |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | **Implemented** |
 | Rich transaction model, offline GeoIP and CSV/JSON/JSONL/XML ingestion (Phase 1) | **Implemented** (synthetic; not used by the analysis) |
+| Peeling-chain, CoinJoin-like detection and on-demand risk propagation (Phase 3 Part A) | **Implemented** (heuristic signals; no UI yet) |
 | Continuous monitoring with automatic micro-batch analysis | **Implemented** |
 | Synthetic network metadata (IP / device / session observations) | **Implemented** |
 | Investigative leads and priority ranking | **Implemented** (prototype bands) |
@@ -380,6 +381,60 @@ builds its own scratch database, imports the rich dataset, runs the entity build
 script reads). It reports entity purity (share of an entity's addresses owned by one true wallet), wallet
 completeness (share of a wallet's addresses that ended up in one entity), and how many wallets stay fragmented
 because their addresses were never spent together in one transaction -- by design of the heuristic, not a bug.
+
+## Pattern detectors (Phase 3, Part A)
+Three detectors on top of the existing wallet-level and rich (address-level) data. Additive: nothing above is
+touched, none of this is hooked into the wallet-level analysis run or the monitor, and all three are heuristic
+signals -- investigative leads for a human to check, never proof of anything.
+
+**Peeling-chain detection** (`backend/analysis/peeling.py`). A peeling chain is a sequence of wallet-level transfers
+A0 -> A1 -> ... -> An where each hop forwards most of what the wallet just received, in one transaction, to the next
+wallet (a large balance walked down a chain, "peeling off" a small amount at each stop). Built entirely from the
+existing flat `transactions` table (sender/receiver/amount/timestamp) -- no rich data needed. Rule: each wallet is
+walked through its own timeline; a receipt is "consumed" by whichever outgoing transfer comes right after it
+(qualifying or not), so only the immediate next spend is ever a candidate continuation, and it qualifies if it
+forwards at least `SIH146_PEELING_DOMINANCE_SHARE` (default 0.85) of what was received. This makes the predecessor
+mapping a disjoint set of simple chains (deterministic, no overlap, no exponential search). A chain is stored once
+it reaches `SIH146_PEELING_MIN_HOPS` (default 3) transfers; id `PEEL-<its first transaction's id>`.
+Prototype thresholds, not statistically validated -- same status as `fusion.py`'s `HIGH_SHARE`/`MEDIUM_SHARE`, but
+overridable via `backend/config.py` / the environment (fusion.py's are not).
+
+**CoinJoin-like detection** (`backend/analysis/coinjoin.py`). A transaction whose rich data shows several distinct
+input addresses (`SIH146_COINJOIN_MIN_INPUTS`, default 3) together with several outputs of about the same value
+(`SIH146_COINJOIN_MIN_EQUAL_OUTPUTS`, default 3, within `SIH146_COINJOIN_EQUAL_VALUE_TOLERANCE` = 1%) is a candidate.
+`score` (0-1) is the share of outputs in the largest equal-value group, scaled down when the input/output counts are
+very unbalanced -- a heuristic confidence, not a probability. A candidate flag, never a certainty: ordinary
+transactions can occasionally match by chance.
+
+**The Phase 2 fix.** `analysis/entities.py`'s common-input-ownership union-find now excludes any transaction present
+in `CoinJoinCandidate` for that source from its input set, so a CoinJoin's pooled inputs are not read as evidence
+that its participants are one entity. If CoinJoin detection has never been run (the table is empty), nothing is
+excluded and behaviour is unchanged from Phase 2 -- the exclusion is additive, not a prerequisite. On the project's
+synthetic rich dataset this changes nothing (0 CoinJoin-like candidates are found there: the Phase 1 generator was
+not designed to produce them), verified instead with a crafted scratch dataset: a 5-address CoinJoin-like pool
+merged into one entity before the fix, and disappeared entirely after it (no other co-spend evidence remained for
+those addresses), while unrelated genuine entities were unaffected (`backend/tests/test_patterns.py`).
+
+**On-demand risk propagation** (`backend/analysis/risk_propagation.py`) -- an investigator tool, not a stored table
+or a background job. Given one or more seed wallets (initial score 1.0), a multi-source breadth-first search assigns
+every reachable wallet `decay_per_hop ** hop_distance` (default decay 0.5, default max 4 hops, capped at 200 nodes;
+all overridable per call or via config). It walks the wallet transfer graph through `wallet_neighbor_links`, a
+function extracted from `services/graph.py` (a pure, behaviour-preserving refactor of the loop `build_graph` already
+used to expand `GET /api/graph`) so both walk the same graph the same way instead of two independent
+implementations; `test_graph.py`'s full suite still passes unchanged. Heuristic investigator aid, not a validated
+risk score: it says only how many transfer hops away a wallet is, never that it did anything wrong.
+
+**Storage (3 new additive tables, table count 25 -> 28):** `peeling_chains`, `peeling_chain_hops` (peeling, built
+from `transactions`), `coinjoin_candidates` (built from the rich tables).
+
+**Run control:** a separate step, like `build-entities`. `python -m backend.cli detect-patterns [--source]` runs
+peeling + CoinJoin together and prints a summary; idempotent (replaces what was stored for that source). Recommended
+order: `detect-patterns` before (re-)running `build-entities`, so CoinJoin exclusion takes effect.
+
+**API (4 new endpoints, count 57 -> 61):** `GET /api/peeling-chains` (paging; filter `wallet`), `GET
+/api/peeling-chains/{chain_id}` (its hops in order), `GET /api/coinjoin-candidates` (paging), `POST
+/api/risk/propagate` (body: `seed_wallets`, optional `max_hops`/`decay_per_hop`overrides -> ranked
+`{wallet, propagated_score, hop_distance, path}`). No UI in this phase.
 
 ## Credits
 IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.

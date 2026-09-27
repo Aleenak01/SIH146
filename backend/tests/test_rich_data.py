@@ -507,7 +507,7 @@ def test_the_new_tables_are_additive(db):
     names = set(inspect(db.engine).get_table_names())
     # 20 at Phase 1; Phase 2 (backend/analysis/entities.py, correlation.py) additively added 5 more
     # (address_entities, address_entity_members, entity_ip_links, entity_links, correlation_findings) -> 25.
-    assert {"tx_details", "tx_inputs", "tx_outputs", "flow_records"} <= names and len(names) == 25 == len(Base.metadata.tables)
+    assert {"tx_details", "tx_inputs", "tx_outputs", "flow_records"} <= names and len(names) == 28 == len(Base.metadata.tables)
     for table, columns in EXISTING_COLUMNS.items():
         assert [c["name"] for c in inspect(db.engine).get_columns(table)] == columns
     indexed = {c for t in ("tx_details", "tx_inputs", "tx_outputs", "flow_records") for ix in inspect(db.engine).get_indexes(t) for c in ix["column_names"]}
@@ -561,15 +561,18 @@ def test_no_rich_field_is_read_by_the_ml_code_or_the_analysis():
     Guards the ORIGINAL wallet-level pipeline (ml/ and the Phase-<=1 modules of backend/analysis/: fusion.py,
     clustering.py, service.py, ml_bridge.py, rules_meta.py) against reading Phase 1's rich/address-level data.
 
-    Phase 2 (backend/analysis/entities.py, correlation.py) is a DELIBERATE, separate address-level analysis layer
-    that legitimately reads tx_inputs/tx_outputs/tx_details/flow_records -- that is its entire purpose -- so those
-    two modules are excluded here and are instead checked by their own, more precise tests in test_entities.py
-    (which assert they never read sender_wallet, receiver_wallet, amount_btc, wallets, or the ground-truth-style
-    address-ownership file: the actual fields that would leak the flat wallet-level view or the answer key).
+    Phase 2 (backend/analysis/entities.py, correlation.py) and Phase 3's backend/analysis/coinjoin.py are DELIBERATE,
+    separate address-level analysis layers that legitimately read tx_inputs/tx_outputs/tx_details/flow_records --
+    that is their entire purpose -- so those modules are excluded here and are instead checked by their own, more
+    precise tests (test_entities.py; test_patterns.py's test_coinjoin_module_never_references_leak_fields_or_ground_truth)
+    which assert they never read sender_wallet, receiver_wallet, amount_btc, wallets, or the ground-truth-style
+    address-ownership file: the actual fields that would leak the flat wallet-level view or the answer key.
+    backend/analysis/peeling.py and risk_propagation.py are NOT excluded: they use only the flat `transactions`
+    table (sender/receiver/amount/timestamp) and never touch the rich address-level tables at all.
     """
     forbidden = ("tx_details", "tx_inputs", "tx_outputs", "flow_records", "TxDetails", "TxInput", "TxOutput", "FlowRecord", "rich_import", "rich_formats",
                  "geoip", "src_ip", "dst_ip", "ground_truth", "script_type", "dataset/rich", "dataset\\rich")
-    exclude = {"backend/analysis/entities.py", "backend/analysis/correlation.py"}
+    exclude = {"backend/analysis/entities.py", "backend/analysis/correlation.py", "backend/analysis/coinjoin.py"}
     paths = list((PROJECT_ROOT / "ml").rglob("*.py")) + list((PROJECT_ROOT / "backend" / "analysis").rglob("*.py"))
     paths = [p for p in paths if p.relative_to(PROJECT_ROOT).as_posix() not in exclude]
     assert len(paths) >= 8

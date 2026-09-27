@@ -16,6 +16,7 @@ EXPECTED_TABLES = {
     "forensic_findings", "investigative_leads", "entity_clusters", "entity_cluster_members", "wallet_reviews", "cases", "case_items",
     "case_history", "app_settings", "tx_details", "tx_inputs", "tx_outputs", "flow_records",
     "address_entities", "address_entity_members", "entity_ip_links", "entity_links", "correlation_findings",
+    "peeling_chains", "peeling_chain_hops", "coinjoin_candidates",
 }
 
 

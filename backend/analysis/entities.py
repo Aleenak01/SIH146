@@ -16,8 +16,12 @@ has no co-spend evidence and is not given an entity of its own by this heuristic
 entities it eventually joins once spent from, and toward received-BTC totals of whichever entity spends it later.
 
 An entity is a heuristic grouping: "likely common control", never proof. Common-input-ownership is well known to be
-broken by CoinJoin-like transactions (independent people co-signing one transaction to look like one payer);
-excluding those transactions is future work (Phase 3), not attempted here.
+broken by CoinJoin-like transactions (independent people co-signing one transaction to look like one payer).
+
+Phase 3: transactions flagged by analysis/coinjoin.py (CoinJoinCandidate) are excluded from the union-find input set
+below, so a CoinJoin-like transaction's co-spend is not treated as evidence that its participants are one entity. If
+CoinJoin detection has never been run for this source (the table is empty), nothing is excluded and behaviour is
+identical to before this fix -- CoinJoin exclusion is additive, not a prerequisite.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from typing import Iterable
 from sqlalchemy import delete, select
 
 from ..database import Database
-from ..models import AddressEntity, AddressEntityMember, FlowRecord, Transaction, TxDetails, TxInput, TxOutput
+from ..models import AddressEntity, AddressEntityMember, CoinJoinCandidate, FlowRecord, Transaction, TxDetails, TxInput, TxOutput
 from ..services.ingest import WRITE_LOCK
 
 METHOD = "common_input_ownership"
@@ -148,7 +152,9 @@ def refresh_entities(db: Database, source: str = "synthetic") -> EntityRefresh:
         tx_ids = set(s.scalars(select(TxDetails.transaction_id).where(TxDetails.source == source)))
         if not tx_ids:
             return EntityRefresh(rich_data_available=False)
-        inputs = [tuple(r) for r in s.execute(select(TxInput.transaction_id, TxInput.address).where(TxInput.transaction_id.in_(tx_ids)))]
+        coinjoin_ids = set(s.scalars(select(CoinJoinCandidate.transaction_id).where(CoinJoinCandidate.source == source)))
+        input_tx_ids = tx_ids - coinjoin_ids   # Phase 3: a CoinJoin-like transaction's co-spend is not evidence of common ownership
+        inputs = [tuple(r) for r in s.execute(select(TxInput.transaction_id, TxInput.address).where(TxInput.transaction_id.in_(input_tx_ids)))]
     if not inputs:
         return EntityRefresh(rich_data_available=False)
     computed = compute_common_input_entities(inputs)

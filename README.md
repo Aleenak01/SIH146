@@ -31,10 +31,11 @@ Read this first:
 |---|---|
 | Synthetic dataset generator + CSV (10,000 rows, 5,000 transfers, 410 wallets, Oct 2025 – Sep 2026) | Tested implementation |
 | Feature engineering, Isolation Forest, forensic rules, result fusion (`ml/`, CLI + CSV outputs) | Tested implementation (unchanged) |
-| Backend API (FastAPI) + SQLite database, 57 endpoints, 25 tables | Tested implementation |
+| Backend API (FastAPI) + SQLite database, 61 endpoints, 28 tables | Tested implementation |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | Tested implementation |
 | Rich address-level model, offline GeoIP, CSV/JSON/JSONL/XML import (Phase 1, synthetic; not used by the analysis) | Tested implementation |
 | Common-input-ownership address entities + network correlation (Phase 2, synthetic; separate from the wallet-level pipeline, no UI yet) | Tested implementation |
+| Peeling-chain / CoinJoin-like detection + on-demand risk propagation (Phase 3 Part A, synthetic, no UI yet) | Tested implementation |
 | Continuous monitoring with automatic (micro-batch) analysis | Tested implementation |
 | Synthetic network metadata (IP / device / session observations) | Tested implementation |
 | Investigative leads and priority ranking | Tested implementation (prototype bands) |
@@ -120,7 +121,7 @@ An automated version of this path runs against a throw-away database and prints 
 │   ├── analysis/                # bridge to ml/, fusion/priority, clustering
 │   ├── services/                # ingest, monitor, leads, graph, cases, search, real source, settings
 │   ├── routers/                 # the API endpoints
-│   └── tests/                   # 407 backend tests
+│   └── tests/                   # 480 backend tests
 ├── frontend/                    # Vite + React + TypeScript investigator UI
 ├── scripts/e2e_check.py         # end-to-end check / demo
 ├── requirements.txt  requirements-dev.txt  pytest.ini  .env.example
@@ -172,6 +173,7 @@ not real blockchain data). Raw dataset columns (fixed): `timestamp`, `wallet_add
 | Settings, sources | `/api/settings`, `/api/sources`, `/api/sources/real-bitcoin`, `/api/sources/real-bitcoin/fetch` |
 | Rich transactions (Phase 1) | `/api/import/rich`, `/api/transactions/{id}/details`, `/api/geoip/status` |
 | Address entities + correlation (Phase 2, synthetic, no UI yet) | `/api/entities`, `/api/entities/{id}`, `/api/entities/run`, `/api/entity-graph` |
+| Pattern detectors (Phase 3 Part A, synthetic, no UI yet) | `/api/peeling-chains`, `/api/peeling-chains/{id}`, `/api/coinjoin-candidates`, `/api/risk/propagate` |
 
 Errors always have the same shape: `{"error": {"code", "message", "details"?}}`.
 
@@ -236,6 +238,24 @@ or `POST /api/entities/run`. Read with `GET /api/entities`, `GET /api/entities/{
 from the wallet-level `/api/graph`). Offline validation against the known ground truth (purity/completeness, **not** read by the
 backend): `.\.venv\Scripts\python.exe scripts\validate_entities.py`.
 
+## Pattern detectors: peeling chains, CoinJoin-like transactions, risk propagation (Phase 3 Part A)
+Three heuristic detectors -- investigative signals for a human to check, never proof of anything. Not hooked into the wallet-level
+analysis run or the monitor.
+- **Peeling chains** (`transactions` table only): a wallet forwards most of what it just received, in one transaction, to the next
+  wallet, repeated for 3+ hops (a large balance walked down a chain). Stored in `peeling_chains` / `peeling_chain_hops`.
+- **CoinJoin-like candidates** (rich data): several distinct input addresses spent together with several outputs of about the same
+  value. Stored in `coinjoin_candidates`. Flagged transactions are then excluded from Phase 2's common-input-ownership entities
+  (re-run `build-entities` after `detect-patterns` for this to take effect; if `detect-patterns` was never run, entities behave
+  exactly as in Phase 2).
+- **Risk propagation** (on demand, nothing stored): from one or more seed wallets (score 1.0), decayed per hop along the wallet
+  transfer graph -- an investigator tool, not a validated risk score.
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli detect-patterns
+```
+or `POST /api/risk/propagate` with `{"seed_wallets": ["wallet_001"]}`. Read with `GET /api/peeling-chains` (filter `wallet`),
+`GET /api/peeling-chains/{chain_id}`, `GET /api/coinjoin-candidates`. Thresholds (dominance share, minimum hops, CoinJoin input/output
+counts, risk decay/hops) are prototype settings, overridable via `.env` (see `.env.example`), not statistically validated.
+
 ## Optional real Bitcoin source
 Off by default; the platform never needs it. It reads recent confirmed blocks from an Esplora-compatible public
 API (default `https://blockstream.info/api`, read-only requests) and stores them with `source = real_bitcoin`,
@@ -254,7 +274,7 @@ shares its timestamp, so read several blocks for meaningful timing. The UI shows
 
 ## Tests
 ```powershell
-.\.venv\Scripts\python.exe -m pytest        # 448 tests (437 backend + 11 pipeline); ~15-30 minutes
+.\.venv\Scripts\python.exe -m pytest        # 491 tests (480 backend + 11 pipeline); ~15-30 minutes
 .\.venv\Scripts\python.exe scripts\e2e_check.py
 cd frontend; npm run build
 ```
