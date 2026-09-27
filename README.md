@@ -31,9 +31,10 @@ Read this first:
 |---|---|
 | Synthetic dataset generator + CSV (10,000 rows, 5,000 transfers, 410 wallets, Oct 2025 – Sep 2026) | Tested implementation |
 | Feature engineering, Isolation Forest, forensic rules, result fusion (`ml/`, CLI + CSV outputs) | Tested implementation (unchanged) |
-| Backend API (FastAPI) + SQLite database, 53 endpoints, 20 tables | Tested implementation |
+| Backend API (FastAPI) + SQLite database, 57 endpoints, 25 tables | Tested implementation |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | Tested implementation |
 | Rich address-level model, offline GeoIP, CSV/JSON/JSONL/XML import (Phase 1, synthetic; not used by the analysis) | Tested implementation |
+| Common-input-ownership address entities + network correlation (Phase 2, synthetic; separate from the wallet-level pipeline, no UI yet) | Tested implementation |
 | Continuous monitoring with automatic (micro-batch) analysis | Tested implementation |
 | Synthetic network metadata (IP / device / session observations) | Tested implementation |
 | Investigative leads and priority ranking | Tested implementation (prototype bands) |
@@ -169,6 +170,8 @@ not real blockchain data). Raw dataset columns (fixed): `timestamp`, `wallet_add
 | Network (synthetic), clusters, graph | `/api/network/observations`, `/api/network/entities/{type}/{id}`, `/api/clusters`, `/api/graph` |
 | Cases, search | `/api/cases` (+ items, notes, reviews, history, transactions, graph), `/api/search` |
 | Settings, sources | `/api/settings`, `/api/sources`, `/api/sources/real-bitcoin`, `/api/sources/real-bitcoin/fetch` |
+| Rich transactions (Phase 1) | `/api/import/rich`, `/api/transactions/{id}/details`, `/api/geoip/status` |
+| Address entities + correlation (Phase 2, synthetic, no UI yet) | `/api/entities`, `/api/entities/{id}`, `/api/entities/run`, `/api/entity-graph` |
 
 Errors always have the same shape: `{"error": {"code", "message", "details"?}}`.
 
@@ -215,6 +218,24 @@ detail to the existing transaction (nothing is duplicated), is idempotent, and r
 **GeoIP credit: IP geolocation by DB-IP.com** (https://db-ip.com), DB-IP Lite country and ASN databases, licensed CC BY 4.0 (`data/geoip/`, see `data/geoip/ATTRIBUTION.txt`).
 The files are used offline; if they are missing the app still works and lookups return empty values.
 
+## Address entities and network correlation (Phase 2)
+Built entirely on the Phase 1 rich data (never on `sender_wallet`/`receiver_wallet`/`amount_btc` or the ground-truth file). Two
+things, computed as a separate step, not by the monitor or the wallet-level analysis run:
+- **Common-input-ownership entities**: addresses spent together as inputs of one transaction are grouped as one likely-same-
+  controller entity (`CIO-<lowest address>`). A heuristic -- likely common control, never proof; broken by CoinJoin-like
+  transactions (excluding those is future work).
+- **Network correlation**: entity-to-IP links and entity-to-entity links via a shared synthetic IP, plus findings such as an IP
+  used by several entities, an entity seen from several countries/ASNs, or an unusual destination port. Evidence, never a verdict.
+
+Stored in 5 new additive tables (`address_entities`, `address_entity_members`, `entity_ip_links`, `entity_links`,
+`correlation_findings`). No UI in this phase.
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli build-entities
+```
+or `POST /api/entities/run`. Read with `GET /api/entities`, `GET /api/entities/{id}`, `GET /api/entity-graph` (a separate graph
+from the wallet-level `/api/graph`). Offline validation against the known ground truth (purity/completeness, **not** read by the
+backend): `.\.venv\Scripts\python.exe scripts\validate_entities.py`.
+
 ## Optional real Bitcoin source
 Off by default; the platform never needs it. It reads recent confirmed blocks from an Esplora-compatible public
 API (default `https://blockstream.info/api`, read-only requests) and stores them with `source = real_bitcoin`,
@@ -233,7 +254,7 @@ shares its timestamp, so read several blocks for meaningful timing. The UI shows
 
 ## Tests
 ```powershell
-.\.venv\Scripts\python.exe -m pytest        # 418 tests (407 backend + 11 pipeline); ~10-20 minutes
+.\.venv\Scripts\python.exe -m pytest        # 448 tests (437 backend + 11 pipeline); ~15-30 minutes
 .\.venv\Scripts\python.exe scripts\e2e_check.py
 cd frontend; npm run build
 ```

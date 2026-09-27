@@ -394,3 +394,89 @@ class FlowRecord(Base):
     asn_org: Mapped[str | None] = mapped_column(String(200))
     is_synthetic: Mapped[bool] = mapped_column(Boolean, default=True)
     origin: Mapped[str] = mapped_column(String(48), default="synthetic_flow_record")
+
+
+# --------------------------------------------------------------------------------------------
+# Address entities and network correlation (Phase 2). All additive: nothing above is touched. Built entirely from the
+# rich address-level tables above (tx_inputs/tx_outputs/tx_details/flow_records); never from the flat wallet-level view.
+# --------------------------------------------------------------------------------------------
+class AddressEntity(Base):
+    """
+    A group of addresses the common-input-ownership heuristic believes share one controller, because they were spent
+    together as inputs of one transaction. Indicates likely common control, never proof (see analysis/entities.py).
+    """
+
+    __tablename__ = "address_entities"
+
+    entity_id: Mapped[str] = mapped_column(String(64), primary_key=True)      # 'CIO-<lowest address>'
+    method: Mapped[str] = mapped_column(String(48))                          # 'common_input_ownership'
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    address_count: Mapped[int] = mapped_column(Integer, default=0)
+    transaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    total_sent_btc: Mapped[float] = mapped_column(Float, default=0.0)
+    total_received_btc: Mapped[float] = mapped_column(Float, default=0.0)
+    distinct_ip_count: Mapped[int] = mapped_column(Integer, default=0)
+    distinct_asn_count: Mapped[int] = mapped_column(Integer, default=0)
+    distinct_country_count: Mapped[int] = mapped_column(Integer, default=0)
+    countries: Mapped[list | None] = mapped_column(JSON)
+    asns: Mapped[list | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    members: Mapped[list["AddressEntityMember"]] = relationship(back_populates="entity", cascade="all, delete-orphan")
+
+
+class AddressEntityMember(Base):
+    __tablename__ = "address_entity_members"
+
+    entity_id: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    address: Mapped[str] = mapped_column(String(128), primary_key=True, index=True)
+
+    entity: Mapped[AddressEntity] = relationship(back_populates="members")
+
+
+class EntityIPLink(Base):
+    """Correlation: an entity spent from an address whose transaction's SYNTHETIC network flow used this src_ip."""
+
+    __tablename__ = "entity_ip_links"
+
+    entity_id: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    ip_address: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    asn: Mapped[int | None] = mapped_column(Integer, index=True)
+    geo_country: Mapped[str | None] = mapped_column(String(2))
+    transaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class EntityLink(Base):
+    """Correlation: two entities whose spending transactions were seen from the same SYNTHETIC src_ip. Not proof of a link."""
+
+    __tablename__ = "entity_links"
+
+    entity_a: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    entity_b: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    link_type: Mapped[str] = mapped_column(String(24), primary_key=True, default="shared_ip")
+    shared_ip_count: Mapped[int] = mapped_column(Integer, default=0)
+    weight: Mapped[int] = mapped_column(Integer, default=0)     # number of distinct shared synthetic IPs; used for ranking
+
+    __table_args__ = (CheckConstraint("entity_a < entity_b", name="ck_entity_link_order"),)
+
+
+class CorrelationFinding(Base):
+    """
+    A network<->blockchain correlation finding for one entity: EVIDENCE, never a verdict. `evidence` keeps the
+    underlying txids/IPs/counts so an investigator can check it themselves.
+    """
+
+    __tablename__ = "correlation_findings"
+
+    finding_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_id: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), index=True)
+    finding_type: Mapped[str] = mapped_column(String(48))
+    description: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSON)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

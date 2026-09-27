@@ -505,7 +505,9 @@ EXISTING_COLUMNS = {
 
 def test_the_new_tables_are_additive(db):
     names = set(inspect(db.engine).get_table_names())
-    assert {"tx_details", "tx_inputs", "tx_outputs", "flow_records"} <= names and len(names) == 20 == len(Base.metadata.tables)
+    # 20 at Phase 1; Phase 2 (backend/analysis/entities.py, correlation.py) additively added 5 more
+    # (address_entities, address_entity_members, entity_ip_links, entity_links, correlation_findings) -> 25.
+    assert {"tx_details", "tx_inputs", "tx_outputs", "flow_records"} <= names and len(names) == 25 == len(Base.metadata.tables)
     for table, columns in EXISTING_COLUMNS.items():
         assert [c["name"] for c in inspect(db.engine).get_columns(table)] == columns
     indexed = {c for t in ("tx_details", "tx_inputs", "tx_outputs", "flow_records") for ix in inspect(db.engine).get_indexes(t) for c in ix["column_names"]}
@@ -555,9 +557,21 @@ def test_the_ground_truth_file_covers_every_address_and_is_never_read_by_the_bac
 
 
 def test_no_rich_field_is_read_by_the_ml_code_or_the_analysis():
+    """
+    Guards the ORIGINAL wallet-level pipeline (ml/ and the Phase-<=1 modules of backend/analysis/: fusion.py,
+    clustering.py, service.py, ml_bridge.py, rules_meta.py) against reading Phase 1's rich/address-level data.
+
+    Phase 2 (backend/analysis/entities.py, correlation.py) is a DELIBERATE, separate address-level analysis layer
+    that legitimately reads tx_inputs/tx_outputs/tx_details/flow_records -- that is its entire purpose -- so those
+    two modules are excluded here and are instead checked by their own, more precise tests in test_entities.py
+    (which assert they never read sender_wallet, receiver_wallet, amount_btc, wallets, or the ground-truth-style
+    address-ownership file: the actual fields that would leak the flat wallet-level view or the answer key).
+    """
     forbidden = ("tx_details", "tx_inputs", "tx_outputs", "flow_records", "TxDetails", "TxInput", "TxOutput", "FlowRecord", "rich_import", "rich_formats",
                  "geoip", "src_ip", "dst_ip", "ground_truth", "script_type", "dataset/rich", "dataset\\rich")
+    exclude = {"backend/analysis/entities.py", "backend/analysis/correlation.py"}
     paths = list((PROJECT_ROOT / "ml").rglob("*.py")) + list((PROJECT_ROOT / "backend" / "analysis").rglob("*.py"))
+    paths = [p for p in paths if p.relative_to(PROJECT_ROOT).as_posix() not in exclude]
     assert len(paths) >= 8
     offenders = {p.relative_to(PROJECT_ROOT).as_posix(): [w for w in forbidden if w in p.read_text(encoding="utf-8")] for p in paths}
     assert {k: v for k, v in offenders.items() if v} == {}

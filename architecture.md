@@ -20,7 +20,8 @@ fraudulent activity. A lead is not a case: only an investigator creates cases.
 | Isolation Forest (`ml/anomaly_detection.py`) and `data/anomaly_results.csv` | **Implemented** |
 | Forensic behavioural rules (`ml/forensic_rules.py`) and `data/forensic_results.csv` | **Implemented** |
 | Result fusion (`ml/result_fusion.py`) and `data/fusion_results.csv` | **Implemented** (prototype weights, not validated) |
-| Backend API (FastAPI, 53 endpoints) and SQLite database (20 tables) | **Implemented** |
+| Backend API (FastAPI, 57 endpoints) and SQLite database (25 tables) | **Implemented** |
+| Common-input-ownership address entities + network correlation (Phase 2, synthetic) | **Implemented** (no UI yet; separate from the wallet-level pipeline) |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | **Implemented** |
 | Rich transaction model, offline GeoIP and CSV/JSON/JSONL/XML ingestion (Phase 1) | **Implemented** (synthetic; not used by the analysis) |
 | Continuous monitoring with automatic micro-batch analysis | **Implemented** |
@@ -335,6 +336,50 @@ These rules carry the design decisions of Phase 1 forward. Anything built on the
    can break the co-spend heuristic, so the later CoinJoin work must be able to exclude such transactions from entity building.
 5. **Reproducibility of the rich dataset.** The committed files in `dataset/rich/` are the reference. Regenerating with a newer DB-IP monthly release gives a different dataset (different IP
    ranges). Git may convert line endings on Windows, so byte hashes of the `dataset/rich/` files can differ after a fresh clone; parsing is unaffected.
+
+## Entity layer (Phase 2)
+Built entirely on the Phase 1 rich address-level tables (`tx_details`, `tx_inputs`, `tx_outputs`, `flow_records`).
+Additive: nothing above is touched, and this layer is a separate step, not part of the wallet-level analysis run
+or the monitor.
+
+**Common-input-ownership entities** (`backend/analysis/entities.py`). The classic Bitcoin-forensics heuristic:
+addresses spent together as inputs of one transaction are very likely controlled by the same wallet/person
+(union-find over `tx_inputs`, grouped by `transaction_id`). An address that never co-spends with another stays its
+own singleton entity. Entity ids are stable across re-runs (`CIO-<lowest address>`, reassigned by largest address
+overlap when entities merge, the same approach as the wallet clusters). Reads **only** `tx_inputs`/`tx_outputs`/
+`tx_details`/`flow_records`; a test inspects the module's source and fails if it references `sender_wallet`,
+`receiver_wallet`, `amount_btc`, or the ground-truth file. An entity is a heuristic grouping -- "likely common
+control", never proof -- and is known to be broken by CoinJoin-like transactions (excluding those is future work).
+
+**Network<->blockchain correlation** (`backend/analysis/correlation.py`), linked through the shared `transaction_id`
+(and therefore `txid`):
+- `entity_ip_links`: an entity spent from an address whose transaction's synthetic `flow_records.src_ip` was this IP
+  (transaction count, first/last seen).
+- `entity_links`: two entities whose spending transactions were seen from the **same** synthetic `src_ip`
+  (`shared_ip`; weight = number of distinct shared IPs).
+- `correlation_findings` (evidence, never a verdict, each keeping its own evidence): `ip_used_by_several_entities`,
+  `entity_many_countries` (3+), `entity_many_asns` (3+), `entity_unusual_port` (destination port other than 8333).
+
+**Storage (5 new additive tables, table count 20 -> 25):** `address_entities`, `address_entity_members`,
+`entity_ip_links`, `entity_links`, `correlation_findings`.
+
+**Run control:** a separate step, not hooked into the wallet-level analysis run or the monitor.
+`python -m backend.cli build-entities [--source]` and `POST /api/entities/run`. Idempotent and deterministic;
+returns `rich_data_available: false` if no rich data has been imported for that source yet.
+
+**API (4 new endpoints, count 53 -> 57):** `GET /api/entities` (paging; filters `min_addresses`, `country`, `asn`,
+`ip`, `q`), `GET /api/entities/{id}` (addresses, spending transactions, IP/ASN/country links, related entities,
+findings), `GET /api/entity-graph` (focus `entity`/`address`/`ip`/`txid`; node types `entity`/`address`/
+`transaction`/`ip`/`asn`/`country`; edge types `in_entity`/`input_of`/`output_to`/`sent_from_ip`/`in_asn`/
+`in_country`/`shared_ip`; depth and node caps with a `truncated` flag, same style as `/api/graph`). This is a
+separate graph from the wallet-level `/api/graph`; neither reads the other. No UI in this phase.
+
+**Offline validation** (`scripts/validate_entities.py`, **not** part of the backend or the analysis pipeline):
+builds its own scratch database, imports the rich dataset, runs the entity build, and compares the result with
+`dataset/rich/ground_truth_address_owner.csv` (the true wallet each address belongs to, which only this validation
+script reads). It reports entity purity (share of an entity's addresses owned by one true wallet), wallet
+completeness (share of a wallet's addresses that ended up in one entity), and how many wallets stay fragmented
+because their addresses were never spent together in one transaction -- by design of the heuristic, not a bug.
 
 ## Credits
 IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.

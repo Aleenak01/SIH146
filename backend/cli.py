@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     ir.add_argument("--format", choices=["csv", "json", "jsonl", "xml"], default=None, help="file format (default: from the file extension)")
     an = sub.add_parser("analyze", help="run the analysis for one data source now")
     an.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
+    be = sub.add_parser("build-entities", help="build common-input-ownership address entities and network correlation from the rich (address-level) SYNTHETIC data (Phase 2)")
+    be.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     sub.add_parser("stats", help="show what the database holds")
     args = parser.parse_args(argv)
 
@@ -106,6 +108,18 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(f"Analysed {s.transfer_count} {args.source} transfers: {s.scored_wallets} wallets scored, {s.unscored_wallets} not scored "
                   f"(too little activity), {s.anomalous_wallets} flagged, {s.leads_total} leads, {s.clusters_total} clusters.")
+        elif args.command == "build-entities":
+            from .analysis.correlation import refresh_correlation
+            from .analysis.entities import refresh_entities
+
+            er = refresh_entities(db, args.source)
+            if not er.rich_data_available:
+                print(f"No rich (address-level) data for source={args.source!r}. Import rich records first (see `import-rich`).")
+            else:
+                cr = refresh_correlation(db, args.source)
+                print(f"Entities: {er.entities} ({er.created} created, {er.updated} updated, {er.removed} removed), {er.addresses_total} addresses.")
+                print(f"Correlation: {cr.entity_ip_links} entity-IP links, {cr.entity_links} entity-entity links, {cr.findings} findings.")
+                print("Synthetic data: this is a possible-link indicator from generated demo network data, not proof of anything.")
         elif args.command == "stats":
             with db.session() as s:
                 print(f"Database: {settings.db_path}")
