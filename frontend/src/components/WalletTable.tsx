@@ -12,13 +12,15 @@ export interface SortState {
   dir: 'asc' | 'desc';
 }
 
-const COLUMNS: { key: SortKey; label: string; align?: 'right'; hint?: string; leads?: boolean }[] = [
+const COLUMNS: { key: SortKey | null; label: string; align?: 'right'; hint?: string; leads?: boolean; confidence?: boolean }[] = [
   { key: 'wallet', label: 'Wallet' },
   { key: 'priority', label: 'Priority', leads: true, hint: 'Prototype priority band from the combined-result rank (top 5% High, next 15% Medium) — not statistically validated' },
   { key: 'ml', label: 'ML anomaly score', align: 'right', hint: 'Isolation Forest score; higher = more unusual' },
   { key: 'evidence', label: 'Forensic evidence' },
   { key: 'rules', label: 'Rules', align: 'right', hint: 'Number of forensic rules triggered' },
   { key: 'combined', label: 'Combined result', align: 'right', hint: 'Prototype fusion of ML and forensic evidence (rank among all wallets)' },
+  { key: null, label: 'Confidence', align: 'right', confidence: true,
+    hint: 'Explainable confidence score: the combined result plus corroborating entity, correlation and pattern signals (Phase 4) — prototype, not statistically validated' },
   { key: 'status', label: 'Status' },
 ];
 
@@ -32,17 +34,24 @@ export function WalletTable({
   onSort,
   leads = false,
   onCreateCase,
+  confidenceScores,
+  typologyTags,
 }: {
   rows: WalletRecord[];
   sort?: SortState;
   onSort?: (key: SortKey) => void;
   leads?: boolean;
   onCreateCase?: (w: WalletRecord) => void;
+  /** Phase 4 Part A, optional: {wallet -> confidence score}. Omit the prop to hide the column entirely (e.g. CSV mode). */
+  confidenceScores?: Map<string, number>;
+  /** Phase 4 Part A, optional: {wallet -> typology tag names} for small badges next to the wallet id. */
+  typologyTags?: Map<string, string[]>;
 }) {
   const navigate = useNavigate();
   const { statusOf, caseIdsFor } = useCases();
   const [open, setOpen] = useState<string | null>(null);
-  const columns = COLUMNS.filter((c) => leads || !c.leads);
+  const showConfidence = confidenceScores !== undefined;
+  const columns = COLUMNS.filter((c) => (leads || !c.leads) && (!c.confidence || showConfidence));
   const span = columns.length + (leads ? 1 : 0);
 
   return (
@@ -52,16 +61,16 @@ export function WalletTable({
           <tr>
             {leads && <th className="chev-col" aria-label="Expand" />}
             {columns.map((c) => {
-              const active = sort?.key === c.key;
+              const active = c.key !== null && sort?.key === c.key;
               return (
                 <th
-                  key={c.key}
+                  key={c.label}
                   className={c.align === 'right' ? 'num' : ''}
                   aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}
                   title={c.hint}
                 >
-                  {onSort ? (
-                    <button type="button" className="th-btn" onClick={() => onSort(c.key)}>
+                  {onSort && c.key ? (
+                    <button type="button" className="th-btn" onClick={() => onSort(c.key!)}>
                       {c.label}
                       {active && (sort!.dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
                     </button>
@@ -93,6 +102,11 @@ export function WalletTable({
                     >
                       {w.id}
                     </a>
+                    {typologyTags?.get(w.id)?.map((t) => (
+                      <span key={t} className="rule-tag rule-tag-inline">
+                        {t}
+                      </span>
+                    ))}
                   </td>
                   {leads && <td>{w.lead ? <PriorityPill level={w.lead.priorityLevel} /> : null}</td>}
                   <td className="num">
@@ -107,6 +121,7 @@ export function WalletTable({
                     <span className="rank">#{w.priorityRank}</span>
                     <span className="mono">{fmtScore(w.fusion.combined_score)}</span>
                   </td>
+                  {showConfidence && <td className="num mono">{confidenceScores!.has(w.id) ? fmtScore(confidenceScores!.get(w.id)!) : '—'}</td>}
                   <td>
                     <StatusPill status={statusOf(w.id)} />
                   </td>

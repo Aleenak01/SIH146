@@ -534,5 +534,34 @@ for new files over edited ones. (Measuring the same way at the `sih146-checkpoin
 not the 61 that phase's own report cited -- that earlier figure evidently counted something else; 56 -> 61 here
 is measured fresh and consistently, both ends via the live OpenAPI schema.)
 
+## Frontend for wallet insights (Phase 4, Part B)
+Same design-system reuse discipline as Phase 3 Part B: no new CSS file, no new component, every new piece built
+from `Panel`, `data-table`, `rule-tag`/`rule-tag-inline`, and the `reasons`/`evidence-col` list styles that already
+existed for the forensic-rules panel.
+
+- **Confidence column** on `WalletTable.tsx` (shared by the Dashboard priority queue and the Anomalies table): an
+  optional `confidenceScores` prop (`{wallet -> score}`); the column itself is only rendered when the prop is
+  passed, so CSV-fallback mode (where the feature does not exist) shows the table exactly as before. Fetched once
+  via a new shared hook, `useConfidenceScores()` (`state/data.tsx`), from `GET /api/confidence-scores?limit=500` --
+  the one hook lives in the shared hooks file (unlike Phase 3's per-page `useCoinjoinIds`) because two independent
+  top-level pages (Dashboard, Anomalies) need the identical map, not one page's two internal views.
+- **Confidence sub-section** inside WalletDetail's existing "Why was this wallet flagged?" panel: a new
+  `evidence-col` block *after* the existing ML/forensic grid (not one of its two grid cells, so the 2-column grid
+  itself is untouched), listing every stored signal with its contribution and plain-language reason, `reasons`-list
+  styled the same as the panel's own rule list. Fetches `GET /api/wallets/{id}/confidence`; a 404 (score not yet
+  computed for this wallet) renders nothing, not an error -- the ML/forensic/combined-result display above it is
+  completely unaffected either way.
+- **Typology badges**: `rule-tag rule-tag-inline` spans next to the wallet id, same mechanism as the existing
+  "repeated"/"possible CoinJoin" badges. On WalletDetail's title (one `GET /api/wallets/{id}/typology` call). On
+  the Anomalies table, typology has no bulk list endpoint (by Part A's own design -- a per-wallet, on-demand
+  synthesis, not a stored table), so tags are fetched only for the wallets on the CURRENT page (`Promise.all` over
+  at most 25 requests, refetched when the visible page's wallet ids change) rather than once for the whole dataset.
+- **Geographic footprint panel** on WalletDetail, next to `RelatedEntities`: a `data-table` of country/ASN counts
+  from `GET /api/wallets/{id}/geo`, always captioned `synthetic`.
+- **"Top countries in leads"** panel on the Dashboard, below the existing two-panel grid (not inside it, since that
+  grid is a fixed 2-column layout and a 3rd item would wrap awkwardly): from `GET /api/geo/summary`.
+
+No backend file was touched in Part B; every one of the six changed files is under `frontend/src/`.
+
 ## Credits
 IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, qs, Unreachable } from '../api/client';
-import type { ApiTransaction, BulkAnalysis, MonitorStatus, Overview } from '../api/types';
+import type { ApiTransaction, BulkAnalysis, ConfidenceScorePage, MonitorStatus, Overview } from '../api/types';
 import { assembleDataset, loadDataset, loadTransfers, type Dataset } from '../data/loader';
 import type { EvidenceLevel, FeatureRow, FusionRow, LeadInfo, Transfer } from '../data/types';
 
@@ -339,4 +339,26 @@ export function useBackend(): Backend {
 export function useFlaggedIds(): Set<string> {
   const { wallets } = useDataset();
   return useMemo(() => new Set(wallets.filter((w) => w.flagged).map((w) => w.id)), [wallets]);
+}
+
+/**
+ * The explainable confidence score (Phase 4 Part A) for every wallet that has one, fetched once from
+ * `/api/confidence-scores`. Alongside, never instead of, the existing combined_score. Empty (not null) if the
+ * backend is not connected or `compute-confidence` has not been run yet.
+ */
+export function useConfidenceScores(): Map<string, number> {
+  const { mode, analysis } = useBackend();
+  const [scores, setScores] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (mode !== 'api') return;
+    let live = true;
+    api.get<ConfidenceScorePage>(`/api/confidence-scores${qs({ limit: 500 })}`).then(
+      (p) => live && setScores(new Map(p.items.map((i) => [i.wallet_address, i.score]))),
+      () => live && setScores(new Map()),
+    );
+    return () => {
+      live = false;
+    };
+  }, [mode, analysis?.runId]);
+  return scores;
 }

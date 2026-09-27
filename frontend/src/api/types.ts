@@ -375,6 +375,54 @@ export interface RiskPropagateOut {
   items: RiskPropagateResult[];
 }
 
+// ---- Phase 4 Part A: explainable confidence score, typology tags, geo aggregation (synthetic) --------------------
+export interface ConfidenceSignalOut {
+  signal_name: string;
+  contribution: number;
+  detail: string;
+}
+export interface ConfidenceScoreOut {
+  wallet_address: string;
+  source: string;
+  score: number;
+  computed_at: string;
+  signals: ConfidenceSignalOut[];
+}
+export interface ConfidenceScorePage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: ConfidenceScoreOut[];
+}
+export interface ConfidenceDetail extends ConfidenceScoreOut {
+  label: string;
+}
+
+export interface TypologyTag {
+  tag: string;
+  reason: string;
+}
+export interface WalletTypology {
+  wallet_address: string;
+  tags: TypologyTag[];
+  note: string;
+}
+
+export interface WalletGeo {
+  wallet_address: string;
+  transaction_count: number;
+  countries: { country: string; count: number }[];
+  asns: { asn: number; asn_org: string | null; count: number }[];
+  note: string;
+}
+export interface GeoSummary {
+  source: string;
+  lead_count: number;
+  top_countries: { country: string; count: number }[];
+  top_asns: { asn: number; asn_org: string | null; count: number }[];
+  note: string;
+}
+
 export interface SettingsView {
   settings: { monitor_enabled: boolean; interval_seconds: number; auto_analysis: boolean; stream_enabled: boolean; stream_rate_per_minute: number };
   saved_keys: string[];

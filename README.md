@@ -36,7 +36,7 @@ Read this first:
 | Rich address-level model, offline GeoIP, CSV/JSON/JSONL/XML import (Phase 1, synthetic; not used by the analysis) | Tested implementation |
 | Common-input-ownership address entities + network correlation (Phase 2, synthetic; separate from the wallet-level pipeline; UI: Network "Entities" tab) | Tested implementation |
 | Peeling-chain / CoinJoin-like detection + on-demand risk propagation (Phase 3, synthetic; UI: badges, related-blocks, Anomalies filter, Wallet Detail panel) | Tested implementation |
-| Explainable confidence score, typology tags, GeoIP geo aggregation (Phase 4 Part A, synthetic; no UI yet) | Tested implementation |
+| Explainable confidence score, typology tags, GeoIP geo aggregation (Phase 4, synthetic; UI: Dashboard, Anomalies, Wallet Detail) | Tested implementation |
 | Continuous monitoring with automatic (micro-batch) analysis | Tested implementation |
 | Synthetic network metadata (IP / device / session observations) | Tested implementation |
 | Investigative leads and priority ranking | Tested implementation (prototype bands) |
@@ -175,7 +175,7 @@ not real blockchain data). Raw dataset columns (fixed): `timestamp`, `wallet_add
 | Rich transactions (Phase 1) | `/api/import/rich`, `/api/transactions/{id}/details`, `/api/geoip/status` |
 | Address entities + correlation (Phase 2, synthetic; UI: Network "Entities" tab) | `/api/entities`, `/api/entities/{id}`, `/api/entities/run`, `/api/entity-graph` |
 | Pattern detectors (Phase 3, synthetic; UI: Related entities, Anomalies, transaction badge, Wallet Detail) | `/api/peeling-chains`, `/api/peeling-chains/{id}`, `/api/coinjoin-candidates`, `/api/risk/propagate` |
-| Wallet insights: confidence score, typology, geo (Phase 4 Part A, synthetic, no UI yet) | `/api/confidence-scores`, `/api/wallets/{id}/confidence`, `/api/wallets/{id}/typology`, `/api/wallets/{id}/geo`, `/api/geo/summary` |
+| Wallet insights: confidence score, typology, geo (Phase 4, synthetic; UI: Dashboard, Anomalies, Wallet Detail) | `/api/confidence-scores`, `/api/wallets/{id}/confidence`, `/api/wallets/{id}/typology`, `/api/wallets/{id}/geo`, `/api/geo/summary` |
 
 Errors always have the same shape: `{"error": {"code", "message", "details"?}}`.
 
@@ -288,7 +288,13 @@ the wallet-level analysis run or the monitor.
 ```
 Run after `build-entities` and `detect-patterns`, so it can see their signals. Read with `GET /api/confidence-scores` (filter
 `min_score`), `GET /api/wallets/{id}/confidence`, `GET /api/wallets/{id}/typology`, `GET /api/wallets/{id}/geo`,
-`GET /api/geo/summary`. No UI yet (Part B, pending authorization).
+`GET /api/geo/summary`.
+
+**UI (Phase 4 Part B):** a "Confidence" column on the Dashboard priority queue and the Anomalies table; a
+"Confidence" sub-section inside Wallet Detail's "Why was this wallet flagged?" panel, alongside (not replacing) the
+existing ML/forensic/combined-result display; typology badges (`rule-tag` style) next to the wallet id on the
+Anomalies table and Wallet Detail; a "Geographic footprint" panel on Wallet Detail; a "Top countries in leads"
+panel on the Dashboard.
 
 ## Optional real Bitcoin source
 Off by default; the platform never needs it. It reads recent confirmed blocks from an Esplora-compatible public

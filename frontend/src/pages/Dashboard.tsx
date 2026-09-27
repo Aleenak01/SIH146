@@ -1,11 +1,13 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { api } from '../api/client';
+import type { GeoSummary } from '../api/types';
 import { PageHeader, Panel, evidenceShort } from '../components/bits';
 import { ActivityTrend, ScoreDistribution } from '../components/charts';
 import { WalletTable } from '../components/WalletTable';
 import { fmtDate, fmtDateTime, fmtInt, fmtPct } from '../format';
 import { useCases } from '../state/cases';
-import { syntheticTx, useBackend, useDataset, useTransfers } from '../state/data';
+import { syntheticTx, useBackend, useConfidenceScores, useDataset, useTransfers } from '../state/data';
 import type { EvidenceLevel } from '../data/types';
 
 const cellLink = (scope: 'flagged' | 'normal', level: EvidenceLevel) =>
@@ -35,6 +37,7 @@ export function Dashboard() {
   const { activeCases, statusOf } = useCases();
   const { mode, overview, monitor, analysis } = useBackend();
   const api = mode === 'api';
+  const confidenceScores = useConfidenceScores();
 
   const s = useMemo(() => {
     const flagged = wallets.filter((w) => w.flagged);
@@ -128,7 +131,7 @@ export function Dashboard() {
             </Link>
           }
         >
-          <WalletTable rows={topByPriority} />
+          <WalletTable rows={topByPriority} confidenceScores={api ? confidenceScores : undefined} />
         </Panel>
 
         <Panel
@@ -163,7 +166,62 @@ export function Dashboard() {
           </table>
         </Panel>
       </div>
+
+      {api && <GeoSummaryPanel />}
     </div>
+  );
+}
+
+/** Dataset-wide top countries/ASNs across current leads (Phase 4 Part A), from synthetic GeoIP demo data. */
+function GeoSummaryPanel() {
+  const [summary, setSummary] = useState<GeoSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api.get<GeoSummary>('/api/geo/summary').then(
+      (s) => live && setSummary(s),
+      (e) => live && setError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return (
+    <Panel
+      title="Top countries in leads"
+      note="Country and ASN breakdown of the synthetic GeoIP data attached to current investigative leads' transactions. Synthetic GeoIP demo data: IP addresses are randomly assigned for the demo, not observed network traffic."
+    >
+      {error && <p className="field-error">Could not load geo summary: {error}</p>}
+      {!summary && !error && <div className="viz-loading">Loading…</div>}
+      {summary && summary.top_countries.length === 0 && <p className="muted">No synthetic GeoIP data is attached to any current lead's transactions.</p>}
+      {summary && summary.top_countries.length > 0 && (
+        <div className="table-wrap">
+          <table className="data-table compact">
+            <thead>
+              <tr>
+                <th>Country</th>
+                <th className="num">Transactions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.top_countries.map((c) => (
+                <tr key={c.country}>
+                  <td className="mono">{c.country}</td>
+                  <td className="num mono">{fmtInt(c.count)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {summary && summary.top_asns.length > 0 && (
+        <p className="muted">
+          Top networks (ASN): {summary.top_asns.map((a) => `${a.asn} (${a.asn_org ?? 'unknown org'}) · ${a.count}`).join(' · ')}
+        </p>
+      )}
+    </Panel>
   );
 }
 

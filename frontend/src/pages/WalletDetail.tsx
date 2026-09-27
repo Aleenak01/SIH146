@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { api } from '../api/client';
-import type { RiskPropagateOut } from '../api/types';
+import type { ConfidenceDetail, RiskPropagateOut, WalletGeo, WalletTypology } from '../api/types';
 import { EvidenceCell, PageHeader, Panel, PredictionText, PriorityPill, StatusPill } from '../components/bits';
 import { CreateCaseDialog } from '../components/CreateCaseDialog';
 import { RelatedEntities } from '../components/RelatedEntities';
@@ -76,7 +76,12 @@ export function WalletDetail() {
     <div className="page">
       <PageHeader
         back={<BackLink />}
-        title={<span className="mono">{wallet.id}</span>}
+        title={
+          <>
+            <span className="mono">{wallet.id}</span>
+            {mode === 'api' && <TypologyBadges id={wallet.id} />}
+          </>
+        }
         subtitle={
           <>
             Priority #{wallet.priorityRank} of {fmtInt(wallets.length)} by combined result{wallet.lead ? <> · <PriorityPill level={wallet.lead.priorityLevel} />{wallet.lead.isLead ? ' lead' : ''}</> : null} · <StatusPill status={status} />
@@ -212,6 +217,7 @@ export function WalletDetail() {
             </p>
           </div>
         </div>
+        {mode === 'api' && <ConfidenceSection id={wallet.id} />}
       </Panel>
 
       <Panel title="Behavioural profile" note="Wallet feature values against the analysed population. The bar marks the wallet’s position from lowest to highest.">
@@ -294,6 +300,8 @@ export function WalletDetail() {
       </Panel>
 
       {mode === 'api' && <RelatedEntities wallet={wallet} />}
+
+      {mode === 'api' && <GeoFootprintPanel id={wallet.id} />}
 
       {mode === 'api' && <RiskPropagationPanel wallet={wallet.id} />}
 
@@ -402,6 +410,120 @@ function RiskPropagationPanel({ wallet }: { wallet: string }) {
             Decay {result.decay_per_hop} per hop, up to {result.max_hops} hops. {result.note}
           </p>
         </>
+      )}
+    </Panel>
+  );
+}
+
+/** Small typology badges (Phase 4 Part A) next to the wallet id, same mechanism as the existing rule-tag badges. */
+function TypologyBadges({ id }: { id: string }) {
+  const [tags, setTags] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    api.get<WalletTypology>(`/api/wallets/${encodeURIComponent(id)}/typology`).then(
+      (t) => live && setTags(t.tags.map((x) => x.tag)),
+      () => live && setTags([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  return (
+    <>
+      {tags.map((t) => (
+        <span key={t} className="rule-tag rule-tag-inline">
+          {t}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** Confidence sub-section (Phase 4 Part A) inside "Why was this wallet flagged?" -- alongside, never replacing, the
+ * existing ML/forensic/combined-result display above it. */
+function ConfidenceSection({ id }: { id: string }) {
+  const [detail, setDetail] = useState<ConfidenceDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api.get<ConfidenceDetail>(`/api/wallets/${encodeURIComponent(id)}/confidence`).then(
+      (d) => live && setDetail(d),
+      (e) => live && setError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  if (error) return null;    // most likely `compute-confidence` has not been run yet; nothing to add here
+  if (!detail) return <div className="viz-loading">Loading confidence…</div>;
+
+  return (
+    <div className="evidence-col">
+      <h3>Confidence</h3>
+      <p>
+        Explainable confidence score <b className="mono">{fmtScore(detail.score)}</b>, alongside (not instead of) the combined result above.{' '}
+        {detail.label}
+      </p>
+      <ul className="reasons">
+        {detail.signals.map((s) => (
+          <li key={s.signal_name}>
+            {s.detail} <span className="muted">(+{fmtScore(s.contribution)})</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Geographic footprint (Phase 4 Part A): country/ASN breakdown of this wallet's traffic, from synthetic GeoIP data. */
+function GeoFootprintPanel({ id }: { id: string }) {
+  const [geo, setGeo] = useState<WalletGeo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api.get<WalletGeo>(`/api/wallets/${encodeURIComponent(id)}/geo`).then(
+      (g) => live && setGeo(g),
+      (e) => live && setError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  return (
+    <Panel
+      title="Geographic footprint"
+      note={<>Synthetic GeoIP demo data <span className="rule-tag">synthetic</span> -- IP addresses are randomly assigned to transactions for the demo, not observed network traffic.</>}
+    >
+      {error && <p className="field-error">Could not load geo data: {error}</p>}
+      {!geo && !error && <div className="viz-loading">Loading…</div>}
+      {geo && geo.countries.length === 0 && geo.asns.length === 0 && <p className="muted">No synthetic GeoIP data is attached to this wallet's transactions.</p>}
+      {geo && (geo.countries.length > 0 || geo.asns.length > 0) && (
+        <div className="table-wrap">
+          <table className="data-table compact">
+            <thead>
+              <tr>
+                <th>Country</th>
+                <th className="num">Transactions</th>
+                <th>ASN</th>
+                <th className="num">Transactions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: Math.max(geo.countries.length, geo.asns.length) }).map((_, i) => (
+                <tr key={i}>
+                  <td className="mono">{geo.countries[i]?.country ?? ''}</td>
+                  <td className="num mono">{geo.countries[i] ? fmtInt(geo.countries[i].count) : ''}</td>
+                  <td className="mono">{geo.asns[i] ? `${geo.asns[i].asn} (${geo.asns[i].asn_org ?? 'unknown org'})` : ''}</td>
+                  <td className="num mono">{geo.asns[i] ? fmtInt(geo.asns[i].count) : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Panel>
   );

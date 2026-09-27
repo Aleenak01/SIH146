@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { api, qs } from '../api/client';
-import type { PeelingChainPage } from '../api/types';
+import type { PeelingChainPage, WalletTypology } from '../api/types';
 import { PageHeader } from '../components/bits';
 import { CreateCaseDialog } from '../components/CreateCaseDialog';
 import { WalletTable, type SortKey, type SortState } from '../components/WalletTable';
@@ -11,7 +11,7 @@ import type { EvidenceLevel, WalletRecord } from '../data/types';
 import { fmtInt } from '../format';
 import { useCases, type ReviewStatus } from '../state/cases';
 import { useConfirm } from '../state/confirm';
-import { useBackend, useDataset } from '../state/data';
+import { useBackend, useConfidenceScores, useDataset } from '../state/data';
 import { useSettings } from '../state/settings';
 
 const PAGE_SIZE = 25;
@@ -52,6 +52,8 @@ export function Anomalies() {
   const [sort, setSort] = useState<SortState>({ key: 'combined', dir: 'desc' });
   const [page, setPage] = useState(0);
   const [peelingWallets, setPeelingWallets] = useState<Set<string>>(new Set());
+  const confidenceScores = useConfidenceScores();
+  const [typologyTags, setTypologyTags] = useState<Map<string, string[]>>(new Map());
 
   useEffect(() => {
     if (!withLeads) return;
@@ -128,6 +130,22 @@ export function Anomalies() {
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pages - 1);
   const visible = rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
+
+  // Typology has no bulk endpoint (Phase 4 Part A) -- fetch it for only the wallets on the current page.
+  useEffect(() => {
+    if (!withLeads || visible.length === 0) return;
+    let live = true;
+    Promise.all(visible.map((w) => api.get<WalletTypology>(`/api/wallets/${encodeURIComponent(w.id)}/typology`).catch(() => null))).then((results) => {
+      if (!live) return;
+      const m = new Map<string, string[]>();
+      for (const r of results) if (r && r.tags.length > 0) m.set(r.wallet_address, r.tags.map((t) => t.tag));
+      setTypologyTags(m);
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [withLeads, visible.map((w) => w.id).join(',')]);
 
   const onSort = (key: SortKey) => {
     setPage(0);
@@ -234,7 +252,15 @@ export function Anomalies() {
         </button>
       </div>
 
-      <WalletTable rows={visible} sort={sort} onSort={onSort} leads={withLeads} onCreateCase={casesAvailable ? startCreate : undefined} />
+      <WalletTable
+        rows={visible}
+        sort={sort}
+        onSort={onSort}
+        leads={withLeads}
+        onCreateCase={casesAvailable ? startCreate : undefined}
+        confidenceScores={withLeads ? confidenceScores : undefined}
+        typologyTags={withLeads ? typologyTags : undefined}
+      />
 
       {pages > 1 && (
         <div className="pager">
