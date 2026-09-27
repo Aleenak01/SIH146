@@ -507,7 +507,8 @@ def test_the_new_tables_are_additive(db):
     names = set(inspect(db.engine).get_table_names())
     # 20 at Phase 1; Phase 2 (backend/analysis/entities.py, correlation.py) additively added 5 more
     # (address_entities, address_entity_members, entity_ip_links, entity_links, correlation_findings) -> 25.
-    assert {"tx_details", "tx_inputs", "tx_outputs", "flow_records"} <= names and len(names) == 28 == len(Base.metadata.tables)
+    # Phase 3 (peeling.py, coinjoin.py) added 3 more -> 28. Phase 4 Part A (confidence.py) added 2 more -> 30.
+    assert {"tx_details", "tx_inputs", "tx_outputs", "flow_records"} <= names and len(names) == 30 == len(Base.metadata.tables)
     for table, columns in EXISTING_COLUMNS.items():
         assert [c["name"] for c in inspect(db.engine).get_columns(table)] == columns
     indexed = {c for t in ("tx_details", "tx_inputs", "tx_outputs", "flow_records") for ix in inspect(db.engine).get_indexes(t) for c in ix["column_names"]}

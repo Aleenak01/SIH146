@@ -539,3 +539,30 @@ class CoinJoinCandidate(Base):
     equal_output_value: Mapped[float] = mapped_column(Float)      # that group's representative (lowest) value
     score: Mapped[float] = mapped_column(Float)                   # 0-1 heuristic confidence; see analysis/coinjoin.py
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ConfidenceScore(Base):
+    """
+    A second, explainable score per wallet (Phase 4 Part A), alongside (never replacing) fusion_results.combined_score.
+    See analysis/confidence.py for the weighting and its reasoning; each contributing signal is its own row in
+    ConfidenceSignal below, so an investigator can see exactly why the score is what it is.
+    """
+
+    __tablename__ = "confidence_scores"
+
+    wallet_address: Mapped[str] = mapped_column(ForeignKey("wallets.address"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    score: Mapped[float] = mapped_column(Float)                    # 0-1; see analysis/confidence.py
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ConfidenceSignal(Base):
+    __tablename__ = "confidence_signals"
+
+    signal_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wallet_address: Mapped[str] = mapped_column(ForeignKey("confidence_scores.wallet_address"), index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    signal_name: Mapped[str] = mapped_column(String(64))
+    contribution: Mapped[float] = mapped_column(Float)             # this signal's share of the score above
+    detail: Mapped[str] = mapped_column(Text)                      # plain-language reason
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

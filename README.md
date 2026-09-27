@@ -31,11 +31,12 @@ Read this first:
 |---|---|
 | Synthetic dataset generator + CSV (10,000 rows, 5,000 transfers, 410 wallets, Oct 2025 – Sep 2026) | Tested implementation |
 | Feature engineering, Isolation Forest, forensic rules, result fusion (`ml/`, CLI + CSV outputs) | Tested implementation (unchanged) |
-| Backend API (FastAPI) + SQLite database, 61 endpoints, 28 tables | Tested implementation |
+| Backend API (FastAPI) + SQLite database, 61 endpoints, 30 tables | Tested implementation |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | Tested implementation |
 | Rich address-level model, offline GeoIP, CSV/JSON/JSONL/XML import (Phase 1, synthetic; not used by the analysis) | Tested implementation |
 | Common-input-ownership address entities + network correlation (Phase 2, synthetic; separate from the wallet-level pipeline; UI: Network "Entities" tab) | Tested implementation |
 | Peeling-chain / CoinJoin-like detection + on-demand risk propagation (Phase 3, synthetic; UI: badges, related-blocks, Anomalies filter, Wallet Detail panel) | Tested implementation |
+| Explainable confidence score, typology tags, GeoIP geo aggregation (Phase 4 Part A, synthetic; no UI yet) | Tested implementation |
 | Continuous monitoring with automatic (micro-batch) analysis | Tested implementation |
 | Synthetic network metadata (IP / device / session observations) | Tested implementation |
 | Investigative leads and priority ranking | Tested implementation (prototype bands) |
@@ -174,6 +175,7 @@ not real blockchain data). Raw dataset columns (fixed): `timestamp`, `wallet_add
 | Rich transactions (Phase 1) | `/api/import/rich`, `/api/transactions/{id}/details`, `/api/geoip/status` |
 | Address entities + correlation (Phase 2, synthetic; UI: Network "Entities" tab) | `/api/entities`, `/api/entities/{id}`, `/api/entities/run`, `/api/entity-graph` |
 | Pattern detectors (Phase 3, synthetic; UI: Related entities, Anomalies, transaction badge, Wallet Detail) | `/api/peeling-chains`, `/api/peeling-chains/{id}`, `/api/coinjoin-candidates`, `/api/risk/propagate` |
+| Wallet insights: confidence score, typology, geo (Phase 4 Part A, synthetic, no UI yet) | `/api/confidence-scores`, `/api/wallets/{id}/confidence`, `/api/wallets/{id}/typology`, `/api/wallets/{id}/geo`, `/api/geo/summary` |
 
 Errors always have the same shape: `{"error": {"code", "message", "details"?}}`.
 
@@ -267,6 +269,26 @@ prototype settings, overridable via `.env` (see `.env.example`), not statistical
 **UI (Phase 3 Part B):** a "possible CoinJoin" badge on transaction rows wherever `TransactionTable` is used (Network,
 Case detail); a "Peeling chain membership" related-block on wallet pages, expandable to the full hop sequence; a "Part
 of a peeling chain" checkbox on Anomalies; an on-demand "Risk propagation from seed wallets" panel on Wallet Detail.
+
+## Wallet insights: confidence score, typology tags, geo aggregation (Phase 4 Part A)
+Closes a gap the problem statement asks for directly: leads only carried the raw prototype `combined_score`, a blend, not a
+confidence measure; GeoIP data has existed since Phase 1 with nothing surfacing it. All read-only/additive; not hooked into
+the wallet-level analysis run or the monitor.
+- **Confidence score**: `BASE_WEIGHT(0.55) * combined_score + ENTITY_WEIGHT(0.15 if its address entity also contains another
+  flagged/lead wallet) + CORRELATION_WEIGHT(0.10 if its entity has a correlation finding) + PATTERN_WEIGHT(0.20 if it's in a
+  peeling chain or a CoinJoin-like transaction)`. Weights sum to 1.0, plain module constants (same style as `fusion.py`'s, not
+  config-overridable), alongside `combined_score`, never replacing it. Stored in `confidence_scores` / `confidence_signals`
+  (one row per contributing signal, with its own plain-language reason -- same explainability spirit as the forensic rules).
+- **Typology tags** (read-only, no new table): `Peeling chain`, `Possible CoinJoin`, `Correlated entity`, each with a reason,
+  synthesized live from Phase 2/3 data.
+- **Geo aggregation** (read-only, no new table): country/ASN breakdown of one wallet's traffic, and a dataset-wide summary
+  across current leads, from `flow_records.geo_country/asn/asn_org` (synthetic GeoIP demo data, never observed traffic).
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli compute-confidence
+```
+Run after `build-entities` and `detect-patterns`, so it can see their signals. Read with `GET /api/confidence-scores` (filter
+`min_score`), `GET /api/wallets/{id}/confidence`, `GET /api/wallets/{id}/typology`, `GET /api/wallets/{id}/geo`,
+`GET /api/geo/summary`. No UI yet (Part B, pending authorization).
 
 ## Optional real Bitcoin source
 Off by default; the platform never needs it. It reads recent confirmed blocks from an Esplora-compatible public

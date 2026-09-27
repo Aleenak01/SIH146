@@ -17,6 +17,7 @@ EXPECTED_TABLES = {
     "case_history", "app_settings", "tx_details", "tx_inputs", "tx_outputs", "flow_records",
     "address_entities", "address_entity_members", "entity_ip_links", "entity_links", "correlation_findings",
     "peeling_chains", "peeling_chain_hops", "coinjoin_candidates",
+    "confidence_scores", "confidence_signals",
 }
 
 

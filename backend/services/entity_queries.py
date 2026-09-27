@@ -24,12 +24,13 @@ def _entity_out(e: AddressEntity) -> dict[str, Any]:
     }
 
 
-def _entities_by_wallet(session: Session, wallet: str) -> set[str]:
+def entity_ids_for_wallet(session: Session, wallet: str) -> set[str]:
     """
     Entity ids with at least one address that was an INPUT of a transaction sent by `wallet` (the flat, wallet-level
     view). This is a read-only, presentational cross-reference for the investigator -- entities themselves are
     always built without ever reading sender_wallet/receiver_wallet (see analysis/entities.py); this function is not
-    part of that computation and does not feed back into it.
+    part of that computation and does not feed back into it. Used by list_entities' `wallet` filter and by
+    services/typology.py.
     """
     tx_ids = select(Transaction.transaction_id).where(Transaction.sender_wallet == wallet)
     addrs = select(TxInput.address).where(TxInput.transaction_id.in_(tx_ids))
@@ -72,7 +73,7 @@ def list_entities(session: Session, *, source: str | None, min_addresses: int | 
         ip_entities = set(session.scalars(select(EntityIPLink.entity_id).where(EntityIPLink.ip_address == ip)))
         entities = [e for e in entities if e.entity_id in ip_entities]
     if wallet:
-        wallet_entities = _entities_by_wallet(session, wallet)
+        wallet_entities = entity_ids_for_wallet(session, wallet)
         entities = [e for e in entities if e.entity_id in wallet_entities]
     if q:
         q_lower = q.strip().lower()

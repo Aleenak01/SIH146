@@ -45,6 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     be.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     dp = sub.add_parser("detect-patterns", help="detect peeling chains (flat transactions) and CoinJoin-like transactions (rich data) (Phase 3)")
     dp.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
+    cc = sub.add_parser("compute-confidence", help="compute the explainable confidence score for every scored wallet (Phase 4). "
+                                                    "Run this AFTER build-entities and detect-patterns, so it can see their signals.")
+    cc.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     sub.add_parser("stats", help="show what the database holds")
     args = parser.parse_args(argv)
 
@@ -132,6 +135,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Peeling chains: {pr.chains} ({pr.hops} hops total, longest {pr.longest_chain} hops).")
             print(f"CoinJoin-like candidates: {cj.candidates} (of {cj.examined} rich transactions examined).")
             print("Both are heuristic signals, never proof. Re-run `build-entities` afterwards so CoinJoin-like transactions are excluded from common-input-ownership entities.")
+        elif args.command == "compute-confidence":
+            from .analysis.confidence import refresh_confidence
+
+            r = refresh_confidence(db, args.source)
+            if not r.analysis_available:
+                print(f"No completed analysis run for source={args.source!r}. Run `analyze` first.")
+            else:
+                print(f"Confidence scores: {r.wallets} wallets (of the latest analysis run's scored wallets).")
+                print("Explainable, prototype weighting (not statistically validated); alongside, never replacing, combined_score.")
         elif args.command == "stats":
             with db.session() as s:
                 print(f"Database: {settings.db_path}")

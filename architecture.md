@@ -479,5 +479,60 @@ file was needed -- every new panel is built entirely from classes that already e
   snapshots) needed its datetimes converted by hand before going into the JSON `evidence_snapshot` column --
   `services/cases.py::_json_safe`.
 
+## Wallet insights: confidence score, typology tags, geo aggregation (Phase 4, Part A)
+Closes a gap the problem statement asks for directly: leads only carried the raw prototype `combined_score`
+(0.4 forensic + 0.6 ML), which is a blend, not a confidence measure, and GeoIP country/ASN data has existed since
+Phase 1 with nothing surfacing it. All three pieces here are additive and read-only over what already exists;
+nothing above is touched, none of it is hooked into the wallet-level analysis run or the monitor.
+
+**Confidence score** (`backend/analysis/confidence.py`) -- a second, explainable score per wallet, shown ALONGSIDE
+(never replacing) `combined_score`:
+```
+confidence_score = BASE_WEIGHT * combined_score
+                  + ENTITY_WEIGHT        (its address entity also contains another flagged/lead wallet)
+                  + CORRELATION_WEIGHT   (its address entity has a recorded correlation finding)
+                  + PATTERN_WEIGHT       (it appears in a peeling chain or a CoinJoin-like transaction)
+```
+`BASE_WEIGHT=0.55, ENTITY_WEIGHT=0.15, CORRELATION_WEIGHT=0.10, PATTERN_WEIGHT=0.20` (sum to 1.0, so the score
+stays in `[0, 1]`). Plain module constants, not config-overridable -- deliberately the same style as
+`fusion.py`'s `HIGH_SHARE`/`MEDIUM_SHARE`, as instructed. Each of the three boost signals is all-or-nothing so
+every point of the score traces back to one named, human-readable reason, stored as its own row (same
+explainability spirit as the forensic rules). Deliberately NOT folded in: on-demand risk propagation, which stays
+a separate, unstored, per-query investigator tool (Phase 3), not a per-wallet answer.
+Reuses `entity_queries.linked_wallets_for_entities` (renamed from `_entities_by_wallet`'s sibling,
+`entity_ids_for_wallet`, made public alongside it) rather than re-deriving wallet<->entity membership a third
+time. Unlike `entities.py`/`correlation.py`/`coinjoin.py`, this module is NOT part of the blind, address-only
+entity-building step, so it reads `sender_wallet`/`receiver_wallet` freely (needed to check pattern involvement)
+and is not subject to their leak-field restriction.
+
+**Storage (2 new additive tables, table count 28 -> 30):** `confidence_scores` (one row per scored wallet: score,
+`computed_at`), `confidence_signals` (one row per contributing signal: `signal_name`, `contribution`, plain-language
+`detail`) -- so an investigator can see exactly which signals fired and by how much, the same way `forensic_findings`
+lets them see exactly which rules triggered.
+
+**Run control:** `python -m backend.cli compute-confidence [--source]`. Idempotent (replaces what was stored for
+that source). Recommended order: after `build-entities` and `detect-patterns`, so it can see their signals; run
+against no completed analysis and it reports `analysis_available: false` instead of erroring.
+
+**Typology tags** (`backend/services/typology.py`) -- read-only, live-synthesized (no new table) per-wallet tags
+over data that already exists: `Peeling chain`, `Possible CoinJoin`, `Correlated entity`, each with a
+plain-language reason. A wallet can carry more than one. Exposed as its own endpoint rather than an addition to
+the existing wallet-analysis response, so nothing about that response's shape changes.
+
+**Geo aggregation** (`backend/services/geo_queries.py`) -- read-only, built on `flow_records.geo_country/asn/asn_org`
+(NOT `tx_details`, where an earlier draft of this instruction placed them; corrected here to the columns that
+actually carry them, `analysis/correlation.py`'s docstring names the same table). One wallet's traffic
+(`GET /api/wallets/{id}/geo`) and a dataset-wide summary across every current investigative lead
+(`GET /api/geo/summary`, for a Dashboard panel). Always labelled synthetic GeoIP demo data, same caution as
+everywhere else this data appears.
+
+**API (5 new endpoints, count 56 -> 61 measured via the OpenAPI schema's path count):**
+`GET /api/confidence-scores` (paging; filter `min_score`), `GET /api/wallets/{id}/confidence`,
+`GET /api/wallets/{id}/typology`, `GET /api/wallets/{id}/geo`, `GET /api/geo/summary`. All in a new
+`backend/routers/insights.py` rather than edited into `wallets.py`/`patterns.py`, per this phase's own preference
+for new files over edited ones. (Measuring the same way at the `sih146-checkpoint-phase3-done` tag gives 56 paths,
+not the 61 that phase's own report cited -- that earlier figure evidently counted something else; 56 -> 61 here
+is measured fresh and consistently, both ends via the live OpenAPI schema.)
+
 ## Credits
 IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.
