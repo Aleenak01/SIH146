@@ -132,7 +132,7 @@ def main() -> None:
         s, case = call("POST", "/api/cases", {"title": f"Fan-in review of {w}", "priority": "High", "note": "Opened from the top lead.",
                                               "items": [{"type": "lead", "id": w}, {"type": "cluster", "id": cl}, {"type": "transaction", "id": tx}]})
         cid = case["case_id"]
-        check(s == 201 and case["item_counts"] == {"lead": 1, "wallet": 0, "transaction": 1, "cluster": 1}, f"{cid} created by the investigator with a lead, a cluster and a transaction")
+        check(s == 201 and case["item_counts"] == {"lead": 1, "wallet": 0, "transaction": 1, "cluster": 1, "entity": 0}, f"{cid} created by the investigator with a lead, a cluster and a transaction")
         snap = next(i for i in case["items"] if i["item_type"] == "lead")["evidence_snapshot"]
         call("PATCH", f"/api/cases/{cid}", {"status": "Under investigation"})
         call("POST", f"/api/cases/{cid}/notes", {"text": "Checked the repeated counterparties."})

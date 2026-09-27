@@ -327,3 +327,242 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# --------------------------------------------------------------------------------------------
+# Rich transaction model (Phase 1). All additive: the tables above are untouched. Everything here is SYNTHETIC.
+# --------------------------------------------------------------------------------------------
+RICH_SCRIPT_TYPES = ("p2pkh", "p2sh", "p2wpkh", "p2wsh", "p2tr")
+
+
+class TxDetails(Base):
+    """Address-level detail of one transaction: its txid, fee and script type. The inputs, outputs and network flow hang off it."""
+
+    __tablename__ = "tx_details"
+
+    detail_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), unique=True)
+    txid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    fee_btc: Mapped[float] = mapped_column(Float)
+    script_type: Mapped[str] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(16), default="synthetic")
+
+    __table_args__ = (
+        CheckConstraint("fee_btc >= 0", name="ck_tx_details_fee"),
+        CheckConstraint("script_type IN ('p2pkh', 'p2sh', 'p2wpkh', 'p2wsh', 'p2tr')", name="ck_tx_details_script"),
+    )
+
+
+class TxInput(Base):
+    __tablename__ = "tx_inputs"
+
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    address: Mapped[str] = mapped_column(String(128), index=True)
+    amount_btc: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (CheckConstraint("amount_btc > 0", name="ck_tx_inputs_amount"),)
+
+
+class TxOutput(Base):
+    __tablename__ = "tx_outputs"
+
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    address: Mapped[str] = mapped_column(String(128), index=True)
+    amount_btc: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (CheckConstraint("amount_btc > 0", name="ck_tx_outputs_amount"),)
+
+
+class FlowRecord(Base):
+    """
+    SYNTHETIC network flow of a transaction: which (randomly assigned) client IP sent it to which (synthetic) node IP and on
+    which ports. geo_country / asn / asn_org describe src_ip (DB-IP Lite lookup). Not observed traffic.
+    """
+
+    __tablename__ = "flow_records"
+
+    flow_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), unique=True)
+    src_ip: Mapped[str | None] = mapped_column(String(64), index=True)
+    dst_ip: Mapped[str | None] = mapped_column(String(64), index=True)
+    src_port: Mapped[int | None] = mapped_column(Integer)
+    dst_port: Mapped[int | None] = mapped_column(Integer)
+    geo_country: Mapped[str | None] = mapped_column(String(2))
+    asn: Mapped[int | None] = mapped_column(Integer, index=True)
+    asn_org: Mapped[str | None] = mapped_column(String(200))
+    is_synthetic: Mapped[bool] = mapped_column(Boolean, default=True)
+    origin: Mapped[str] = mapped_column(String(48), default="synthetic_flow_record")
+
+
+# --------------------------------------------------------------------------------------------
+# Address entities and network correlation (Phase 2). All additive: nothing above is touched. Built entirely from the
+# rich address-level tables above (tx_inputs/tx_outputs/tx_details/flow_records); never from the flat wallet-level view.
+# --------------------------------------------------------------------------------------------
+class AddressEntity(Base):
+    """
+    A group of addresses the common-input-ownership heuristic believes share one controller, because they were spent
+    together as inputs of one transaction. Indicates likely common control, never proof (see analysis/entities.py).
+    """
+
+    __tablename__ = "address_entities"
+
+    entity_id: Mapped[str] = mapped_column(String(64), primary_key=True)      # 'CIO-<lowest address>'
+    method: Mapped[str] = mapped_column(String(48))                          # 'common_input_ownership'
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    address_count: Mapped[int] = mapped_column(Integer, default=0)
+    transaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    total_sent_btc: Mapped[float] = mapped_column(Float, default=0.0)
+    total_received_btc: Mapped[float] = mapped_column(Float, default=0.0)
+    distinct_ip_count: Mapped[int] = mapped_column(Integer, default=0)
+    distinct_asn_count: Mapped[int] = mapped_column(Integer, default=0)
+    distinct_country_count: Mapped[int] = mapped_column(Integer, default=0)
+    countries: Mapped[list | None] = mapped_column(JSON)
+    asns: Mapped[list | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    members: Mapped[list["AddressEntityMember"]] = relationship(back_populates="entity", cascade="all, delete-orphan")
+
+
+class AddressEntityMember(Base):
+    __tablename__ = "address_entity_members"
+
+    entity_id: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    address: Mapped[str] = mapped_column(String(128), primary_key=True, index=True)
+
+    entity: Mapped[AddressEntity] = relationship(back_populates="members")
+
+
+class EntityIPLink(Base):
+    """Correlation: an entity spent from an address whose transaction's SYNTHETIC network flow used this src_ip."""
+
+    __tablename__ = "entity_ip_links"
+
+    entity_id: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    ip_address: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    asn: Mapped[int | None] = mapped_column(Integer, index=True)
+    geo_country: Mapped[str | None] = mapped_column(String(2))
+    transaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class EntityLink(Base):
+    """Correlation: two entities whose spending transactions were seen from the same SYNTHETIC src_ip. Not proof of a link."""
+
+    __tablename__ = "entity_links"
+
+    entity_a: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    entity_b: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), primary_key=True)
+    link_type: Mapped[str] = mapped_column(String(24), primary_key=True, default="shared_ip")
+    shared_ip_count: Mapped[int] = mapped_column(Integer, default=0)
+    weight: Mapped[int] = mapped_column(Integer, default=0)     # number of distinct shared synthetic IPs; used for ranking
+
+    __table_args__ = (CheckConstraint("entity_a < entity_b", name="ck_entity_link_order"),)
+
+
+class CorrelationFinding(Base):
+    """
+    A network<->blockchain correlation finding for one entity: EVIDENCE, never a verdict. `evidence` keeps the
+    underlying txids/IPs/counts so an investigator can check it themselves.
+    """
+
+    __tablename__ = "correlation_findings"
+
+    finding_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_id: Mapped[str] = mapped_column(ForeignKey("address_entities.entity_id"), index=True)
+    finding_type: Mapped[str] = mapped_column(String(48))
+    description: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSON)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# --------------------------------------------------------------------------------------------
+# Pattern detectors (Phase 3, Part A): peeling chains and CoinJoin-like candidates. Additive; nothing above is
+# touched. Peeling is built from the existing flat `transactions` table; CoinJoin detection is built from the rich
+# address-level tables above. Both are heuristic flags -- investigative signals, never proof of anything.
+# --------------------------------------------------------------------------------------------
+class PeelingChain(Base):
+    """
+    A peeling chain: a sequence of wallet-level transfers A0 -> A1 -> ... -> An where each hop forwards most of what
+    the previous hop just delivered (see analysis/peeling.py for the exact rule and its threshold). A heuristic
+    pattern (large, repeated "change"), never proof of layering or laundering.
+    """
+
+    __tablename__ = "peeling_chains"
+
+    chain_id: Mapped[str] = mapped_column(String(80), primary_key=True)     # 'PEEL-<the chain's first transaction_id>'
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    start_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    end_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    hop_count: Mapped[int] = mapped_column(Integer)
+    total_btc_start: Mapped[float] = mapped_column(Float)
+    total_btc_end: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    hops: Mapped[list["PeelingChainHop"]] = relationship(back_populates="chain", cascade="all, delete-orphan", order_by="PeelingChainHop.hop_index")
+
+
+class PeelingChainHop(Base):
+    __tablename__ = "peeling_chain_hops"
+
+    chain_id: Mapped[str] = mapped_column(ForeignKey("peeling_chains.chain_id"), primary_key=True)
+    hop_index: Mapped[int] = mapped_column(Integer, primary_key=True)          # 1-based: hop 1 is the chain's first transfer
+    from_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    to_wallet: Mapped[str] = mapped_column(String(128), index=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"))
+    amount_btc: Mapped[float] = mapped_column(Float)
+
+    chain: Mapped[PeelingChain] = relationship(back_populates="hops")
+
+
+class CoinJoinCandidate(Base):
+    """
+    A transaction whose rich (address-level) data looks like a CoinJoin: several distinct input addresses spent
+    together with several outputs of about the same value. A heuristic candidate flag, never a certainty (see
+    analysis/coinjoin.py). Transactions flagged here are excluded from the common-input-ownership union-find in
+    analysis/entities.py, since pooling several independent people's inputs is the whole point of a CoinJoin.
+    """
+
+    __tablename__ = "coinjoin_candidates"
+
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.transaction_id"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    input_count: Mapped[int] = mapped_column(Integer)             # distinct input addresses
+    output_count: Mapped[int] = mapped_column(Integer)            # distinct output addresses
+    equal_output_group_size: Mapped[int] = mapped_column(Integer)  # size of the largest near-equal-value output group
+    equal_output_value: Mapped[float] = mapped_column(Float)      # that group's representative (lowest) value
+    score: Mapped[float] = mapped_column(Float)                   # 0-1 heuristic confidence; see analysis/coinjoin.py
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ConfidenceScore(Base):
+    """
+    A second, explainable score per wallet (Phase 4 Part A), alongside (never replacing) fusion_results.combined_score.
+    See analysis/confidence.py for the weighting and its reasoning; each contributing signal is its own row in
+    ConfidenceSignal below, so an investigator can see exactly why the score is what it is.
+    """
+
+    __tablename__ = "confidence_scores"
+
+    wallet_address: Mapped[str] = mapped_column(ForeignKey("wallets.address"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    score: Mapped[float] = mapped_column(Float)                    # 0-1; see analysis/confidence.py
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ConfidenceSignal(Base):
+    __tablename__ = "confidence_signals"
+
+    signal_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    wallet_address: Mapped[str] = mapped_column(ForeignKey("confidence_scores.wallet_address"), index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    signal_name: Mapped[str] = mapped_column(String(64))
+    contribution: Mapped[float] = mapped_column(Float)             # this signal's share of the score above
+    detail: Mapped[str] = mapped_column(Text)                      # plain-language reason
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

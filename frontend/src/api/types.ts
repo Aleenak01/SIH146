@@ -126,7 +126,9 @@ export interface ClusterDetail extends ClusterSummary {
 
 export interface GraphNode {
   id: string;
-  type: 'wallet' | 'transaction' | 'ip_observation' | 'device' | 'session';
+  /** 'wallet' | 'transaction' | 'ip_observation' | 'device' | 'session' (the wallet-level graph), or
+   * 'entity' | 'address' | 'ip' | 'asn' | 'country' (the address-level entity graph, /api/entity-graph). */
+  type: string;
   label: string;
   data: Record<string, any>;
 }
@@ -180,7 +182,7 @@ export interface EntityDetail {
 
 export type CaseStatus = 'Open' | 'Under investigation' | 'Closed';
 export type CasePriority = 'High' | 'Medium' | 'Low';
-export type ItemType = 'lead' | 'wallet' | 'transaction' | 'cluster';
+export type ItemType = 'lead' | 'wallet' | 'transaction' | 'cluster' | 'entity';
 
 export interface CaseSummary {
   case_id: string;
@@ -248,6 +250,177 @@ export interface RealSourceStatus {
   normalization: string[];
   features: { feature: string; availability: 'available' | 'needs_two_transactions'; note: string }[];
   network_metadata: Record<string, string>;
+}
+
+// ---- Phase 2: address entities and network correlation (synthetic) ----------------------------------------------
+export interface EntitySummary {
+  entity_id: string;
+  method: string;
+  method_label: string;
+  source: string;
+  address_count: number;
+  transaction_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  total_sent_btc: number;
+  total_received_btc: number;
+  distinct_ip_count: number;
+  distinct_asn_count: number;
+  distinct_country_count: number;
+  countries: string[];
+  asns: number[];
+  /** Read-only cross-reference for the investigator: which wallet(s) sent the transactions this entity spent from. Never used to build the entity itself. */
+  linked_wallets: string[];
+  created_at: string;
+  updated_at: string;
+}
+export interface EntityPage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: EntitySummary[];
+}
+export interface EntityIpLink {
+  ip_address: string;
+  asn: number | null;
+  geo_country: string | null;
+  transaction_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+export interface EntityLinkOut {
+  entity_a: string;
+  entity_b: string;
+  link_type: string;
+  shared_ip_count: number;
+  weight: number;
+}
+export interface CorrelationFindingOut {
+  finding_type: string;
+  description: string;
+  evidence: Record<string, any>;
+}
+/** An address entity's full detail. Named AddressEntityDetail (not EntityDetail) to avoid clashing with the
+ * existing EntityDetail interface for the legacy synthetic IP/device/session "entities" used by ClustersView. */
+export interface AddressEntityDetail extends EntitySummary {
+  addresses: string[];
+  spending_transaction_ids: string[];
+  ip_links: EntityIpLink[];
+  related_entities: string[];
+  links: EntityLinkOut[];
+  findings: CorrelationFindingOut[];
+  note: string;
+}
+
+// ---- Phase 3 Part A: peeling chains, CoinJoin-like candidates, risk propagation (synthetic, heuristic) -----------
+export interface PeelingChainSummary {
+  chain_id: string;
+  source: string;
+  start_wallet: string;
+  end_wallet: string;
+  hop_count: number;
+  total_btc_start: number;
+  total_btc_end: number;
+  created_at: string;
+  /** Every wallet appearing in any hop of the chain (not only the two endpoints). */
+  wallets: string[];
+}
+export interface PeelingChainPage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: PeelingChainSummary[];
+}
+export interface PeelingChainHopOut {
+  hop_index: number;
+  from_wallet: string;
+  to_wallet: string;
+  transaction_id: string;
+  amount_btc: number;
+}
+export interface PeelingChainDetail extends PeelingChainSummary {
+  hops: PeelingChainHopOut[];
+  note: string;
+}
+
+export interface CoinJoinCandidateOut {
+  transaction_id: string;
+  source: string;
+  input_count: number;
+  output_count: number;
+  equal_output_group_size: number;
+  equal_output_value: number;
+  score: number;
+  created_at: string;
+}
+export interface CoinJoinCandidatePage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: CoinJoinCandidateOut[];
+  note: string;
+}
+
+export interface RiskPropagateResult {
+  wallet: string;
+  propagated_score: number;
+  hop_distance: number;
+  path: string[];
+}
+export interface RiskPropagateOut {
+  seed_wallets: string[];
+  decay_per_hop: number;
+  max_hops: number;
+  note: string;
+  items: RiskPropagateResult[];
+}
+
+// ---- Phase 4 Part A: explainable confidence score, typology tags, geo aggregation (synthetic) --------------------
+export interface ConfidenceSignalOut {
+  signal_name: string;
+  contribution: number;
+  detail: string;
+}
+export interface ConfidenceScoreOut {
+  wallet_address: string;
+  source: string;
+  score: number;
+  computed_at: string;
+  signals: ConfidenceSignalOut[];
+}
+export interface ConfidenceScorePage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: ConfidenceScoreOut[];
+}
+export interface ConfidenceDetail extends ConfidenceScoreOut {
+  label: string;
+}
+
+export interface TypologyTag {
+  tag: string;
+  reason: string;
+}
+export interface WalletTypology {
+  wallet_address: string;
+  tags: TypologyTag[];
+  note: string;
+}
+
+export interface WalletGeo {
+  wallet_address: string;
+  transaction_count: number;
+  countries: { country: string; count: number }[];
+  asns: { asn: number; asn_org: string | null; count: number }[];
+  note: string;
+}
+export interface GeoSummary {
+  source: string;
+  lead_count: number;
+  top_countries: { country: string; count: number }[];
+  top_asns: { asn: number; asn_org: string | null; count: number }[];
+  note: string;
 }
 
 export interface SettingsView {

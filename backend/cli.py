@@ -1,7 +1,9 @@
 """
 Command-line helpers.
 
-    .\\.venv\\Scripts\\python.exe -m backend.cli init-db
+    Windows:      .\\.venv\\Scripts\\python.exe -m backend.cli init-db
+    Linux/macOS:  ./.venv/bin/python -m backend.cli init-db
+
     .\\.venv\\Scripts\\python.exe -m backend.cli import-csv [--replace]
     .\\.venv\\Scripts\\python.exe -m backend.cli stats
 """
@@ -36,8 +38,18 @@ def main(argv: list[str] | None = None) -> int:
     fr.add_argument("--blocks", type=int, default=1, help="how many of the newest blocks to read (default 1)")
     fr.add_argument("--heights", type=int, nargs="+", help="explicit block heights instead of the newest blocks")
     fr.add_argument("--max-tx-per-block", type=int, default=None, help="most transactions to read from each block")
+    ir = sub.add_parser("import-rich", help="import rich (address-level) SYNTHETIC transaction records from a CSV / JSON / JSONL / XML file")
+    ir.add_argument("path", help="file to import")
+    ir.add_argument("--format", choices=["csv", "json", "jsonl", "xml"], default=None, help="file format (default: from the file extension)")
     an = sub.add_parser("analyze", help="run the analysis for one data source now")
     an.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
+    be = sub.add_parser("build-entities", help="build common-input-ownership address entities and network correlation from the rich (address-level) SYNTHETIC data (Phase 2)")
+    be.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
+    dp = sub.add_parser("detect-patterns", help="detect peeling chains (flat transactions) and CoinJoin-like transactions (rich data) (Phase 3)")
+    dp.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
+    cc = sub.add_parser("compute-confidence", help="compute the explainable confidence score for every scored wallet (Phase 4). "
+                                                    "Run this AFTER build-entities and detect-patterns, so it can see their signals.")
+    cc.add_argument("--source", choices=["synthetic", "real_bitcoin"], default="synthetic")
     sub.add_parser("stats", help="show what the database holds")
     args = parser.parse_args(argv)
 
@@ -71,6 +83,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Read {r['transactions_examined']} real transactions from {len(r['blocks'])} block(s) "
                   f"(heights {', '.join(str(b['height']) for b in r['blocks'])}) with {r['requests']} API requests.")
             print(f"Stored {r['inserted']} transfers as source=real_bitcoin ({r['duplicates']} already present, {r['rejected']} rejected). Skipped: {r['skipped'] or 'none'}.")
+        elif args.command == "import-rich":
+            from pathlib import Path
+
+            from .ingestion.rich_formats import FormatError, parse, validate_records
+            from .services.geoip import GeoIP
+            from .services.rich_import import import_rich
+
+            path = Path(args.path)
+            fmt = args.format or path.suffix.lstrip(".").lower()
+            try:
+                raw, parse_rejected = parse(path.read_bytes(), fmt)
+            except (FormatError, OSError) as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 1
+            valid, invalid = validate_records(raw)
+            res = import_rich(db, valid, GeoIP.from_settings(settings), received=len(raw) + len(parse_rejected), rejected=list(parse_rejected) + invalid)
+            print(f"{res.received} records read from {path.name} ({fmt}): {res.attached} attached to existing transactions, {res.created} transactions created, "
+                  f"{res.duplicates} already imported, {len(res.rejected)} rejected, {len(res.warnings)} warnings. tx_details now holds {res.details_total} rows.")
+            for r in sorted(res.rejected, key=lambda r: r["index"])[:10]:
+                print(f"  rejected #{r['index']}: {r['error']}")
+            print("Synthetic data: IP addresses are randomly assigned, not observed traffic.")
         elif args.command == "analyze":
             from .analysis.ml_bridge import AnalysisError
             from .analysis.service import run_analysis
@@ -82,6 +115,37 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(f"Analysed {s.transfer_count} {args.source} transfers: {s.scored_wallets} wallets scored, {s.unscored_wallets} not scored "
                   f"(too little activity), {s.anomalous_wallets} flagged, {s.leads_total} leads, {s.clusters_total} clusters.")
+        elif args.command == "build-entities":
+            from .analysis.correlation import refresh_correlation
+            from .analysis.entities import refresh_entities
+
+            er = refresh_entities(db, args.source)
+            if not er.rich_data_available:
+                print(f"No rich (address-level) data for source={args.source!r}. Import rich records first (see `import-rich`).")
+            else:
+                cr = refresh_correlation(db, args.source)
+                print(f"Entities: {er.entities} ({er.created} created, {er.updated} updated, {er.removed} removed), {er.addresses_total} addresses.")
+                print(f"Correlation: {cr.entity_ip_links} entity-IP links, {cr.entity_links} entity-entity links, {cr.findings} findings.")
+                print("Synthetic data: this is a possible-link indicator from generated demo network data, not proof of anything.")
+        elif args.command == "detect-patterns":
+            from .analysis.coinjoin import refresh_coinjoin
+            from .analysis.peeling import refresh_peeling
+
+            pr = refresh_peeling(db, args.source, dominance_share=settings.peeling_dominance_share, min_hops=settings.peeling_min_hops)
+            cj = refresh_coinjoin(db, args.source, min_inputs=settings.coinjoin_min_inputs, min_equal_outputs=settings.coinjoin_min_equal_outputs,
+                                  tolerance=settings.coinjoin_equal_value_tolerance)
+            print(f"Peeling chains: {pr.chains} ({pr.hops} hops total, longest {pr.longest_chain} hops).")
+            print(f"CoinJoin-like candidates: {cj.candidates} (of {cj.examined} rich transactions examined).")
+            print("Both are heuristic signals, never proof. Re-run `build-entities` afterwards so CoinJoin-like transactions are excluded from common-input-ownership entities.")
+        elif args.command == "compute-confidence":
+            from .analysis.confidence import refresh_confidence
+
+            r = refresh_confidence(db, args.source)
+            if not r.analysis_available:
+                print(f"No completed analysis run for source={args.source!r}. Run `analyze` first.")
+            else:
+                print(f"Confidence scores: {r.wallets} wallets (of the latest analysis run's scored wallets).")
+                print("Explainable, prototype weighting (not statistically validated); alongside, never replacing, combined_score.")
         elif args.command == "stats":
             with db.session() as s:
                 print(f"Database: {settings.db_path}")

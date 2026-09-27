@@ -408,7 +408,7 @@ from typing import Literal  # noqa: E402
 
 CaseStatus = Literal["Open", "Under investigation", "Closed"]
 CasePriority = Literal["High", "Medium", "Low"]
-ItemType = Literal["lead", "wallet", "transaction", "cluster"]
+ItemType = Literal["lead", "wallet", "transaction", "cluster", "entity"]
 CASE_DISCLAIMER = ("A case records an investigator's decision to review something formally. It does not establish that any wrongdoing "
                    "occurred; the evidence in it is behavioural and statistical and requires investigator judgement.")
 

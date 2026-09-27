@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     AnalysisRun, AnomalyResult, EntityCluster, EntityClusterMember, ForensicFinding, FusionResult, InvestigativeLead,
-    NetworkObservation, Transaction, Wallet, WalletFeatures,
+    FlowRecord, NetworkObservation, Transaction, TxDetails, TxInput, TxOutput, Wallet, WalletFeatures,
 )
 
 
@@ -29,6 +29,8 @@ def purge_source(session: Session, source: str) -> int:
     session.execute(delete(EntityClusterMember).where(EntityClusterMember.cluster_id.in_(clusters)))
     session.execute(delete(EntityCluster).where(EntityCluster.source == source))
     session.execute(delete(AnalysisRun).where(AnalysisRun.source == source))
+    for model in (TxInput, TxOutput, FlowRecord, TxDetails):            # rich-record detail rows reference transactions
+        session.execute(delete(model).where(model.transaction_id.in_(tx_ids)))
     session.execute(delete(Transaction).where(Transaction.source == source))
     session.execute(delete(Wallet).where(Wallet.source == source))
     return n_tx

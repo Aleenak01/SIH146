@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Download } from 'lucide-react';
 import { api, qs } from '../api/client';
-import type { ApiTransaction, CaseDetail as CaseDetailT, CaseItem, CasePriority, GraphOut, ItemType } from '../api/types';
+import type { ApiTransaction, CaseDetail as CaseDetailT, CaseItem, CasePriority, CoinJoinCandidatePage, GraphOut, ItemType } from '../api/types';
 import { CaseStatusPill, EvidenceCell, PageHeader, Panel, PredictionText, PriorityPill } from '../components/bits';
 import { TransactionTable } from '../components/TransactionTable';
 import { TRANSFER_COLUMNS, downloadCsv, downloadJson, stamp, transferRows } from '../data/export';
@@ -15,7 +15,7 @@ import { useConfirm } from '../state/confirm';
 import { useBackend, useFlaggedIds } from '../state/data';
 
 const STATUSES: CaseStatus[] = ['Open', 'Under investigation', 'Closed'];
-const ITEM_LABEL: Record<ItemType, string> = { lead: 'Lead', wallet: 'Wallet', transaction: 'Transaction', cluster: 'Cluster' };
+const ITEM_LABEL: Record<ItemType, string> = { lead: 'Lead', wallet: 'Wallet', transaction: 'Transaction', cluster: 'Cluster', entity: 'Entity' };
 
 const pretty = (action: string) => {
   const s = action.replace(/_/g, ' ');
@@ -43,6 +43,7 @@ export function CaseDetail() {
   const [graph, setGraph] = useState<GraphOut | null>(null);
   const [addType, setAddType] = useState<ItemType>('wallet');
   const [addId, setAddId] = useState('');
+  const [coinjoinIds, setCoinjoinIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -63,6 +64,17 @@ export function CaseDetail() {
   useEffect(() => {
     void load();
   }, [load, backend.analysis?.runId]);
+
+  useEffect(() => {
+    let live = true;
+    api.get<CoinJoinCandidatePage>(`/api/coinjoin-candidates${qs({ limit: 500 })}`).then(
+      (p) => live && setCoinjoinIds(new Set(p.items.map((x) => x.transaction_id))),
+      () => live && setCoinjoinIds(new Set()),
+    );
+    return () => {
+      live = false;
+    };
+  }, [backend.analysis?.runId]);
 
   useEffect(() => {
     if (!c) return;
@@ -262,8 +274,14 @@ export function CaseDetail() {
             <option value="lead">Lead</option>
             <option value="transaction">Transaction</option>
             <option value="cluster">Cluster</option>
+            <option value="entity">Entity</option>
           </select>
-          <input value={addId} onChange={(e) => setAddId(e.target.value)} placeholder={addType === 'transaction' ? 'syn-000123' : addType === 'cluster' ? 'NET-0001' : 'wallet_…'} aria-label="Item ID" />
+          <input
+            value={addId}
+            onChange={(e) => setAddId(e.target.value)}
+            placeholder={addType === 'transaction' ? 'syn-000123' : addType === 'cluster' ? 'NET-0001' : addType === 'entity' ? 'CIO-…' : 'wallet_…'}
+            aria-label="Item ID"
+          />
           <button type="submit" className="btn btn-sm" disabled={busy || !addId.trim()}>
             Add
           </button>
@@ -347,7 +365,7 @@ export function CaseDetail() {
           </button>
         }
       >
-        {txs ? <TransactionTable rows={txs} flaggedIds={flaggedIds} pageSize={15} emptyText="No transactions are related to this case yet." /> : <div className="viz-loading">Loading transactions…</div>}
+        {txs ? <TransactionTable rows={txs} flaggedIds={flaggedIds} coinjoinIds={coinjoinIds} pageSize={15} emptyText="No transactions are related to this case yet." /> : <div className="viz-loading">Loading transactions…</div>}
       </Panel>
     </div>
   );
@@ -449,6 +467,32 @@ function ItemCard({ item, busy, onReviewed, onRemove }: { item: CaseItem; busy: 
         <p className="caveat">{s.note}</p>
         {cur?.exists && cur.wallet_count !== s.wallet_count && <p className="caveat changed">Today the cluster has {cur.wallet_count} wallets. The saved evidence above is unchanged.</p>}
         {cur && !cur.exists && <p className="caveat changed">This cluster id no longer exists (clusters are recomputed after each analysis).</p>}
+      </>
+    );
+  } else if (item.item_type === 'entity' && s) {
+    body = (
+      <>
+        <div className="case-wallet-head">
+          <Link to={`/network?view=entities&entity=${item.item_id}`} className="mono wallet-link">
+            {item.item_id}
+          </Link>
+          <span>
+            {s.address_count} addresses · {s.method_label}
+          </span>
+          <span className="muted">{s.transaction_count} transactions</span>
+        </div>
+        {(s.linked_wallets?.length ?? 0) > 0 && (
+          <p className="muted">
+            Linked wallets: {s.linked_wallets.map((w: string) => (
+              <Link key={w} to={`/wallets/${w}`} className="mono chip-link">
+                {w}
+              </Link>
+            ))}
+          </p>
+        )}
+        <p className="caveat">{s.note}</p>
+        {cur?.exists && cur.address_count !== s.address_count && <p className="caveat changed">Today the entity has {cur.address_count} addresses. The saved evidence above is unchanged.</p>}
+        {cur && !cur.exists && <p className="caveat changed">This entity id no longer exists (entities are recomputed after each analysis).</p>}
       </>
     );
   } else if (item.item_type === 'transaction' && s) {

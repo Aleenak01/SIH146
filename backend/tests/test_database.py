@@ -14,7 +14,10 @@ from backend.models import FEATURE_COLUMNS, Base, Transaction, Wallet
 EXPECTED_TABLES = {
     "transactions", "wallets", "network_observations", "analysis_runs", "wallet_features", "anomaly_results", "fusion_results",
     "forensic_findings", "investigative_leads", "entity_clusters", "entity_cluster_members", "wallet_reviews", "cases", "case_items",
-    "case_history", "app_settings",
+    "case_history", "app_settings", "tx_details", "tx_inputs", "tx_outputs", "flow_records",
+    "address_entities", "address_entity_members", "entity_ip_links", "entity_links", "correlation_findings",
+    "peeling_chains", "peeling_chain_hops", "coinjoin_candidates",
+    "confidence_scores", "confidence_signals",
 }
 
 

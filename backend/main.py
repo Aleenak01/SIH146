@@ -2,7 +2,8 @@
 FastAPI application factory.
 
 Run locally from the project root:
-    .\\.venv\\Scripts\\python.exe -m backend            (serves http://127.0.0.1:8000, docs at /docs)
+    Windows:      .\\.venv\\Scripts\\python.exe -m backend   (serves http://127.0.0.1:8000, docs at /docs)
+    Linux/macOS:  ./.venv/bin/python -m backend
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from . import __version__
 from .config import Settings, load_settings
 from .database import Database
 from .errors import install_error_handlers
-from .routers import analysis, cases, clusters, graph, health, imports, leads, monitor as monitor_router, network, search, settings as settings_router, sources, transactions, wallets
+from .routers import analysis, cases, clusters, entities, graph, health, imports, insights, leads, monitor as monitor_router, network, patterns, rich, search, settings as settings_router, sources, transactions, wallets
 from .services import app_settings
 from .services.monitor import Monitor
 from .services.real_source import RealSourceState
@@ -48,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
     install_error_handlers(app)
-    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search, settings_router, sources):
+    for module in (health, transactions, wallets, imports, analysis, leads, monitor_router, network, clusters, graph, cases, search, settings_router, sources, rich, entities, patterns, insights):
         app.include_router(module.router)
     return app
 

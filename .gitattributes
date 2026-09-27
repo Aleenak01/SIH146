@@ -1,0 +1,3 @@
+# Shell scripts must always checkout with LF endings, regardless of a contributor's core.autocrlf setting,
+# so they keep working on Linux/macOS no matter who last committed them from Windows.
+*.sh text eol=lf
