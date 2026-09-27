@@ -34,8 +34,8 @@ Read this first:
 | Backend API (FastAPI) + SQLite database, 61 endpoints, 28 tables | Tested implementation |
 | Ingestion: synthetic CSV, synthetic stream, inbox folder, API | Tested implementation |
 | Rich address-level model, offline GeoIP, CSV/JSON/JSONL/XML import (Phase 1, synthetic; not used by the analysis) | Tested implementation |
-| Common-input-ownership address entities + network correlation (Phase 2, synthetic; separate from the wallet-level pipeline, no UI yet) | Tested implementation |
-| Peeling-chain / CoinJoin-like detection + on-demand risk propagation (Phase 3 Part A, synthetic, no UI yet) | Tested implementation |
+| Common-input-ownership address entities + network correlation (Phase 2, synthetic; separate from the wallet-level pipeline; UI: Network "Entities" tab) | Tested implementation |
+| Peeling-chain / CoinJoin-like detection + on-demand risk propagation (Phase 3, synthetic; UI: badges, related-blocks, Anomalies filter, Wallet Detail panel) | Tested implementation |
 | Continuous monitoring with automatic (micro-batch) analysis | Tested implementation |
 | Synthetic network metadata (IP / device / session observations) | Tested implementation |
 | Investigative leads and priority ranking | Tested implementation (prototype bands) |
@@ -43,7 +43,7 @@ Read this first:
 | Relationship graph API and UI (React Flow) | Tested implementation |
 | Unified search (wallets, transactions, clusters, IPs, devices, sessions, cases) | Tested implementation |
 | Case management with saved evidence, notes and history | Tested implementation |
-| Investigator UI (Dashboard, Anomalies + leads, Wallet, Cases, Transactions / Network + clusters, Settings) | Tested implementation |
+| Investigator UI (Dashboard, Anomalies + leads, Wallet, Cases, Transactions / Network + clusters + entities, Settings) | Tested implementation |
 | Local / offline operation, with CSV fallback when the backend is not running | Tested implementation |
 | Real Bitcoin source (Esplora-compatible, read-only) | Fully implemented as an optional adapter; **off by default**; verified live on one block; not shown in the UI |
 | Authentication, multi-user, deployment hardening | Not implemented (single-user local prototype) |
@@ -172,8 +172,8 @@ not real blockchain data). Raw dataset columns (fixed): `timestamp`, `wallet_add
 | Cases, search | `/api/cases` (+ items, notes, reviews, history, transactions, graph), `/api/search` |
 | Settings, sources | `/api/settings`, `/api/sources`, `/api/sources/real-bitcoin`, `/api/sources/real-bitcoin/fetch` |
 | Rich transactions (Phase 1) | `/api/import/rich`, `/api/transactions/{id}/details`, `/api/geoip/status` |
-| Address entities + correlation (Phase 2, synthetic, no UI yet) | `/api/entities`, `/api/entities/{id}`, `/api/entities/run`, `/api/entity-graph` |
-| Pattern detectors (Phase 3 Part A, synthetic, no UI yet) | `/api/peeling-chains`, `/api/peeling-chains/{id}`, `/api/coinjoin-candidates`, `/api/risk/propagate` |
+| Address entities + correlation (Phase 2, synthetic; UI: Network "Entities" tab) | `/api/entities`, `/api/entities/{id}`, `/api/entities/run`, `/api/entity-graph` |
+| Pattern detectors (Phase 3, synthetic; UI: Related entities, Anomalies, transaction badge, Wallet Detail) | `/api/peeling-chains`, `/api/peeling-chains/{id}`, `/api/coinjoin-candidates`, `/api/risk/propagate` |
 
 Errors always have the same shape: `{"error": {"code", "message", "details"?}}`.
 
@@ -194,7 +194,12 @@ changeable in the UI (Settings) and are saved in the database.
 ## Frontend
 Vite + React + TypeScript, Recharts, React Flow. Same five sidebar items: Dashboard, Anomalies, Cases,
 Transactions / Network, Settings, in light and dark themes. Leads live inside Anomalies; clusters and synthetic
-network entities live inside Transactions / Network (a "Clusters" tab) and on wallet pages; search is in the sidebar.
+network entities live inside Transactions / Network (a "Clusters" tab) and on wallet pages; address entities from
+the common-input-ownership heuristic live in a 4th "Entities" tab on the same page; search is in the sidebar.
+Peeling chains, CoinJoin-like candidates and risk propagation (Phase 3) surface as: a "possible CoinJoin" badge on
+transaction rows, a peeling-chain / address-entity related-block on wallet pages, a "Part of a peeling chain"
+filter on Anomalies, and an on-demand risk-propagation panel on Wallet Detail. Cases can now hold an address entity
+as an item, alongside leads, wallets, transactions and clusters.
 ```powershell
 cd frontend
 npm run dev        # http://localhost:5173 (proxies /api to the backend on port 8000)
@@ -230,7 +235,9 @@ things, computed as a separate step, not by the monitor or the wallet-level anal
   used by several entities, an entity seen from several countries/ASNs, or an unusual destination port. Evidence, never a verdict.
 
 Stored in 5 new additive tables (`address_entities`, `address_entity_members`, `entity_ip_links`, `entity_links`,
-`correlation_findings`). No UI in this phase.
+`correlation_findings`). UI added in Phase 3 Part B: a 4th "Entities" tab on Transactions / Network, and an
+"Address entity" related-block on wallet pages (`GET /api/entities` gained a read-only `wallet` filter and a
+`linked_wallets` field for this -- purely presentational, never fed back into the entity-building union-find).
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli build-entities
 ```
@@ -238,7 +245,7 @@ or `POST /api/entities/run`. Read with `GET /api/entities`, `GET /api/entities/{
 from the wallet-level `/api/graph`). Offline validation against the known ground truth (purity/completeness, **not** read by the
 backend): `.\.venv\Scripts\python.exe scripts\validate_entities.py`.
 
-## Pattern detectors: peeling chains, CoinJoin-like transactions, risk propagation (Phase 3 Part A)
+## Pattern detectors: peeling chains, CoinJoin-like transactions, risk propagation (Phase 3)
 Three heuristic detectors -- investigative signals for a human to check, never proof of anything. Not hooked into the wallet-level
 analysis run or the monitor.
 - **Peeling chains** (`transactions` table only): a wallet forwards most of what it just received, in one transaction, to the next
@@ -252,9 +259,14 @@ analysis run or the monitor.
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli detect-patterns
 ```
-or `POST /api/risk/propagate` with `{"seed_wallets": ["wallet_001"]}`. Read with `GET /api/peeling-chains` (filter `wallet`),
-`GET /api/peeling-chains/{chain_id}`, `GET /api/coinjoin-candidates`. Thresholds (dominance share, minimum hops, CoinJoin input/output
-counts, risk decay/hops) are prototype settings, overridable via `.env` (see `.env.example`), not statistically validated.
+or `POST /api/risk/propagate` with `{"seed_wallets": ["wallet_001"]}`. Read with `GET /api/peeling-chains` (filter `wallet`; each
+item's `wallets` field lists every wallet in the chain, not only its endpoints), `GET /api/peeling-chains/{chain_id}`,
+`GET /api/coinjoin-candidates`. Thresholds (dominance share, minimum hops, CoinJoin input/output counts, risk decay/hops) are
+prototype settings, overridable via `.env` (see `.env.example`), not statistically validated.
+
+**UI (Phase 3 Part B):** a "possible CoinJoin" badge on transaction rows wherever `TransactionTable` is used (Network,
+Case detail); a "Peeling chain membership" related-block on wallet pages, expandable to the full hop sequence; a "Part
+of a peeling chain" checkbox on Anomalies; an on-demand "Risk propagation from seed wallets" panel on Wallet Detail.
 
 ## Optional real Bitcoin source
 Off by default; the platform never needs it. It reads recent confirmed blocks from an Esplora-compatible public

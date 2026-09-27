@@ -9,6 +9,7 @@ Every change is recorded in the case history.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Integer, cast, func, or_, select
@@ -16,16 +17,16 @@ from sqlalchemy.orm import Session
 
 from ..errors import AppError
 from ..models import (
-    Case, CaseHistory, CaseItem, EntityCluster, EntityClusterMember, NetworkObservation, Transaction, utcnow,
+    AddressEntity, Case, CaseHistory, CaseItem, EntityCluster, EntityClusterMember, NetworkObservation, Transaction, utcnow,
 )
 from ..schemas import (
     CaseCreate, CaseDetail, CaseHistoryOut, CaseItemIn, CaseItemOut, CaseSummary, CaseUpdate, ObservationOut,
 )
-from . import cluster_queries, leads as leads_service, queries
+from . import cluster_queries, entity_queries, leads as leads_service, queries
 from .ingest import WRITE_LOCK
 
 ACTOR = "Investigator"          # no authentication in the local prototype
-ADDED_ACTION = {"lead": "lead_added", "wallet": "wallet_added", "transaction": "transaction_added", "cluster": "cluster_added"}
+ADDED_ACTION = {"lead": "lead_added", "wallet": "wallet_added", "transaction": "transaction_added", "cluster": "cluster_added", "entity": "entity_added"}
 CASE_PREFIX = "CASE-"
 
 
@@ -54,6 +55,18 @@ def _clean(value: str | None) -> str | None:
 
 
 # ---- evidence snapshots -----------------------------------------------------------------------------------------
+def _json_safe(value: Any) -> Any:
+    """entity_queries returns plain dicts (no Pydantic model backs them), so datetimes need converting by hand
+    before they go into the JSON evidence_snapshot column -- same convention as the isoformat() calls above."""
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def build_snapshot(session: Session, item_type: str, item_id: str) -> dict[str, Any]:
     """The evidence for an item as it stands now (JSON-safe). Raises 404 if the item does not exist."""
     taken = utcnow().isoformat() + "Z"
@@ -89,6 +102,12 @@ def build_snapshot(session: Session, item_type: str, item_id: str) -> dict[str, 
         data = d.model_dump(mode="json", exclude={"graph", "internal_relationships", "sessions"})
         data["session_count"] = len(d.sessions)
         return {"kind": "cluster", "taken_at": taken, **data}
+    if item_type == "entity":
+        data = entity_queries.get_entity_detail(session, item_id)
+        if data is None:
+            raise AppError(404, "not_found", f"No address entity {item_id!r}.")
+        data = {**data, "addresses": data["addresses"][:200]}       # an entity can have many addresses; cap the stored snapshot
+        return _json_safe({"kind": "entity", "taken_at": taken, **data})
     raise AppError(422, "validation_error", f"Unknown item type {item_type!r}.")
 
 
@@ -103,6 +122,10 @@ def _current(session: Session, item_type: str, item_id: str) -> dict[str, Any] |
     if item_type == "cluster":
         c = session.get(EntityCluster, item_id)
         return {"exists": False} if c is None else {"exists": True, "wallet_count": c.wallet_count, "priority_summary": c.priority_summary}
+    if item_type == "entity":
+        e = session.get(AddressEntity, item_id)
+        return {"exists": False} if e is None else {"exists": True, "address_count": e.address_count, "transaction_count": e.transaction_count,
+                                                     "total_sent_btc": e.total_sent_btc, "total_received_btc": e.total_received_btc}
     return {"exists": session.get(Transaction, item_id) is not None}
 
 
@@ -174,7 +197,7 @@ def add_review(case: Case, item_type: str, item_id: str, note: str | None) -> No
 
 # ---- reading ----------------------------------------------------------------------------------------------------------
 def _counts(items) -> dict[str, int]:
-    out = {"lead": 0, "wallet": 0, "transaction": 0, "cluster": 0}
+    out = {"lead": 0, "wallet": 0, "transaction": 0, "cluster": 0, "entity": 0}
     for i in items:
         out[i.item_type] = out.get(i.item_type, 0) + 1
     return out
@@ -256,5 +279,10 @@ def graph_seed_wallets(session: Session, case: Case) -> list[str]:
             tx = session.get(Transaction, i.item_id)
             if tx is not None:
                 seeds += [tx.sender_wallet, tx.receiver_wallet]
+        elif i.item_type == "entity":
+            # An address entity has no owning wallet of its own; seed the graph with the wallets that sent the
+            # transactions it spent from (the same read-only cross-reference GET /api/entities exposes as
+            # linked_wallets), purely so the case graph has something wallet-level to draw for it.
+            seeds += entity_queries.linked_wallets_for_entities(session, [i.item_id]).get(i.item_id, [])
     return list(dict.fromkeys(seeds))
 

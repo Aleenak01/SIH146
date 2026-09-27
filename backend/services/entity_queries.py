@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..analysis.entities import METHOD_LABEL, NOTE
-from ..models import AddressEntity, AddressEntityMember, CorrelationFinding, EntityIPLink, EntityLink, TxInput
+from ..models import AddressEntity, AddressEntityMember, CorrelationFinding, EntityIPLink, EntityLink, Transaction, TxInput
 
 
 def _entity_out(e: AddressEntity) -> dict[str, Any]:
@@ -23,8 +24,38 @@ def _entity_out(e: AddressEntity) -> dict[str, Any]:
     }
 
 
+def _entities_by_wallet(session: Session, wallet: str) -> set[str]:
+    """
+    Entity ids with at least one address that was an INPUT of a transaction sent by `wallet` (the flat, wallet-level
+    view). This is a read-only, presentational cross-reference for the investigator -- entities themselves are
+    always built without ever reading sender_wallet/receiver_wallet (see analysis/entities.py); this function is not
+    part of that computation and does not feed back into it.
+    """
+    tx_ids = select(Transaction.transaction_id).where(Transaction.sender_wallet == wallet)
+    addrs = select(TxInput.address).where(TxInput.transaction_id.in_(tx_ids))
+    return set(session.scalars(select(AddressEntityMember.entity_id).where(AddressEntityMember.address.in_(addrs))))
+
+
+def linked_wallets_for_entities(session: Session, entity_ids: list[str]) -> dict[str, list[str]]:
+    """{entity_id: [wallets that sent a transaction the entity spent from]}, for a bounded set of entities (a page)."""
+    if not entity_ids:
+        return {}
+    members = session.execute(select(AddressEntityMember.entity_id, AddressEntityMember.address).where(AddressEntityMember.entity_id.in_(entity_ids))).all()
+    addr_to_entities: dict[str, set[str]] = defaultdict(set)
+    for eid, addr in members:
+        addr_to_entities[addr].add(eid)
+    tx_rows = session.execute(select(TxInput.transaction_id, TxInput.address).where(TxInput.address.in_(addr_to_entities))).all()
+    entity_tx: dict[str, set[str]] = defaultdict(set)
+    for tid, addr in tx_rows:
+        for eid in addr_to_entities[addr]:
+            entity_tx[eid].add(tid)
+    all_tx_ids = {t for tids in entity_tx.values() for t in tids}
+    tx_wallet = dict(session.execute(select(Transaction.transaction_id, Transaction.sender_wallet).where(Transaction.transaction_id.in_(all_tx_ids))).all())
+    return {eid: sorted({tx_wallet[t] for t in tids if t in tx_wallet}) for eid, tids in entity_tx.items()}
+
+
 def list_entities(session: Session, *, source: str | None, min_addresses: int | None, country: str | None, asn: int | None,
-                  ip: str | None, q: str | None, sort: str, limit: int, offset: int) -> tuple[int, list[dict[str, Any]]]:
+                  ip: str | None, wallet: str | None, q: str | None, sort: str, limit: int, offset: int) -> tuple[int, list[dict[str, Any]]]:
     stmt = select(AddressEntity)
     if source:
         stmt = stmt.where(AddressEntity.source == source)
@@ -40,6 +71,9 @@ def list_entities(session: Session, *, source: str | None, min_addresses: int | 
     if ip:
         ip_entities = set(session.scalars(select(EntityIPLink.entity_id).where(EntityIPLink.ip_address == ip)))
         entities = [e for e in entities if e.entity_id in ip_entities]
+    if wallet:
+        wallet_entities = _entities_by_wallet(session, wallet)
+        entities = [e for e in entities if e.entity_id in wallet_entities]
     if q:
         q_lower = q.strip().lower()
         member_entities = set(session.scalars(select(AddressEntityMember.entity_id).where(AddressEntityMember.address.contains(q, autoescape=True))))
@@ -52,7 +86,9 @@ def list_entities(session: Session, *, source: str | None, min_addresses: int | 
     }
     entities.sort(key=keys.get(sort, keys["size"]))
     total = len(entities)
-    return total, [_entity_out(e) for e in entities[offset: offset + limit]]
+    page = entities[offset: offset + limit]
+    linked = linked_wallets_for_entities(session, [e.entity_id for e in page])
+    return total, [{**_entity_out(e), "linked_wallets": linked.get(e.entity_id, [])} for e in page]
 
 
 def get_entity_detail(session: Session, entity_id: str) -> dict[str, Any] | None:
@@ -69,6 +105,7 @@ def get_entity_detail(session: Session, entity_id: str) -> dict[str, Any] | None
     related_entities = sorted({(link.entity_b if link.entity_a == entity_id else link.entity_a) for link in links})
     return {
         **_entity_out(e),
+        "linked_wallets": linked_wallets_for_entities(session, [entity_id]).get(entity_id, []),
         "addresses": addresses,
         "spending_transaction_ids": spending_tx_ids,
         "ip_links": [{"ip_address": l.ip_address, "asn": l.asn, "geo_country": l.geo_country, "transaction_count": l.transaction_count,

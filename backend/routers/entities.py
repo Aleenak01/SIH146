@@ -26,6 +26,7 @@ def list_entities(
     country: Annotated[str | None, Query(min_length=2, max_length=2)] = None,
     asn: Annotated[int | None, Query(ge=0)] = None,
     ip: Annotated[str | None, Query(max_length=64)] = None,
+    wallet: Annotated[str | None, Query(max_length=128, description="Only entities with an address that was an input of a transaction sent by this wallet")] = None,
     q: Annotated[str | None, Query(max_length=128, description="Entity id or a member address")] = None,
     sort: Literal["size", "activity", "id"] = "size",
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
@@ -34,9 +35,11 @@ def list_entities(
     """
     Address entities from the common-input-ownership heuristic: addresses spent together as inputs of one
     transaction. An entity indicates likely common control, never proof. Built entirely from the rich (address-level)
-    SYNTHETIC data (Phase 1); distinct from the wallet-level clusters at /api/clusters.
+    SYNTHETIC data (Phase 1); distinct from the wallet-level clusters at /api/clusters. Each item's `linked_wallets`
+    is a read-only cross-reference (which wallet(s) sent the transactions the entity spent from), shown for
+    investigator context; it is never used to build the entities themselves.
     """
-    total, items = entity_queries.list_entities(session, source=source, min_addresses=min_addresses, country=country, asn=asn, ip=ip, q=q, sort=sort, limit=limit, offset=offset)
+    total, items = entity_queries.list_entities(session, source=source, min_addresses=min_addresses, country=country, asn=asn, ip=ip, wallet=wallet, q=q, sort=sort, limit=limit, offset=offset)
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 

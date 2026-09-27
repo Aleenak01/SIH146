@@ -17,11 +17,16 @@ import type { GraphEdge, GraphNode, GraphOut } from '../api/types';
 import { fmtScore } from '../format';
 import { useTheme } from '../state/theme';
 
-// Renders a graph returned by the backend (/api/graph, cluster and case graphs). Nodes are laid out in
-// columns by type; IP, device and session nodes are SYNTHETIC network observations and say so.
+// Renders a graph returned by the backend (/api/graph, cluster and case graphs, and Phase 2's /api/entity-graph).
+// Nodes are laid out in columns by type; IP, device and session nodes are SYNTHETIC network observations and say so.
+// The entity-graph lanes ('entity', 'address', 'ip', 'asn', 'country') are appended after the wallet-graph ones, so
+// a wallet-focused graph (which never contains those types) lays out exactly as before this was added.
 
-const LANES: GraphNode['type'][] = ['ip_observation', 'device', 'session', 'wallet', 'transaction'];
-const KIND: Record<string, string> = { ip_observation: 'IP (synthetic)', device: 'Device (synthetic)', session: 'Session (synthetic)', transaction: 'Transaction' };
+const LANES: string[] = ['ip_observation', 'device', 'session', 'wallet', 'transaction', 'entity', 'address', 'ip', 'asn', 'country'];
+const KIND: Record<string, string> = {
+  ip_observation: 'IP (synthetic)', device: 'Device (synthetic)', session: 'Session (synthetic)', transaction: 'Transaction',
+  ip: 'IP (synthetic)', asn: 'ASN (synthetic)', country: 'Country (synthetic)', address: 'Address',
+};
 const NODE_W = 200;
 const ROW_H = 70;
 
@@ -66,20 +71,37 @@ function InfraNode({ data }: NodeProps<Node<NData>>) {
         ? `${d.observation_count ?? 1} observation${d.observation_count === 1 ? '' : 's'}`
         : n.type === 'session'
           ? `${d.observation_count ?? 1} observation${d.observation_count === 1 ? '' : 's'}`
-          : d.amount_btc !== undefined
-            ? `${d.amount_btc} BTC`
-            : '';
+          : n.type === 'asn' && d.asn_org
+            ? String(d.asn_org)
+            : d.amount_btc !== undefined
+              ? `${d.amount_btc} BTC`
+              : '';
   return (
     <div className={`wf-node infra infra-${n.type}${d.is_focus ? ' focus' : ''}`} title={String(d.note ?? '')}>
       <Handles />
-      <div className="wf-kind">{KIND[n.type]}</div>
+      <div className="wf-kind">{KIND[n.type] ?? n.type}</div>
       <div className="wf-id">{n.label}</div>
       {detail && <div className="wf-meta">{detail}</div>}
     </div>
   );
 }
 
-const nodeTypes: NodeTypes = { wallet: WalletNode, infra: InfraNode };
+/** An address entity (Phase 2's /api/entity-graph): the "main" object of that graph, analogous to a wallet node. */
+function EntityNode({ data }: NodeProps<Node<NData>>) {
+  const n = data.node;
+  const d = n.data;
+  return (
+    <div className={`wf-node${d.is_focus ? ' focus' : ''}`}>
+      <Handles />
+      <div className="wf-id">{n.label}</div>
+      <div className="wf-meta">
+        {d.address_count ?? 0} address{d.address_count === 1 ? '' : 'es'} · {d.transaction_count ?? 0} tx
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes: NodeTypes = { wallet: WalletNode, infra: InfraNode, entity: EntityNode };
 
 function layout(g: GraphOut): { nodes: Node<NData>[]; edges: Edge[] } {
   const byType = new Map<string, GraphNode[]>();
@@ -99,7 +121,7 @@ function layout(g: GraphOut): { nodes: Node<NData>[]; edges: Edge[] } {
 
   const nodes: Node<NData>[] = g.nodes.map((n) => ({
     id: n.id,
-    type: n.type === 'wallet' ? 'wallet' : 'infra',
+    type: n.type === 'wallet' ? 'wallet' : n.type === 'entity' ? 'entity' : 'infra',
     position: pos.get(n.id) ?? { x: 0, y: 0 },
     data: { node: n },
     draggable: false,
@@ -113,21 +135,27 @@ function layout(g: GraphOut): { nodes: Node<NData>[]; edges: Edge[] } {
       const pt = pos.get(e.target)!;
       const [sh, th] = ps.x < pt.x ? ['r-s', 'l-t'] : ps.x > pt.x ? ['l-s', 'r-t'] : ['r-s', 'r-t'];
       const transfer = e.type === 'sent_to' || e.type === 'received_from';
-      const derived = e.type === 'same_device' || e.type === 'same_session';
+      // Entity-graph edges: 'shared_ip' is the entity<->entity analog of same_device/same_session (a possible link,
+      // never proof); the rest are directed structural edges (address belongs to entity, was an input/output of a
+      // transaction, or that transaction's synthetic flow went to this IP/ASN/country) -- drawn like a transfer
+      // (an arrowhead so direction is visible) but without a transfer count to size the line by.
+      const derived = e.type === 'same_device' || e.type === 'same_session' || e.type === 'shared_ip';
+      const directed = e.type === 'in_entity' || e.type === 'input_of' || e.type === 'output_to' || e.type === 'sent_from_ip' || e.type === 'in_asn' || e.type === 'in_country';
       const transfers = Number(e.data.transfers ?? 1);
+      const label = e.type === 'same_device' ? 'same device' : e.type === 'same_session' ? 'same session' : e.type === 'shared_ip' ? 'shared IP' : undefined;
       return {
         id: e.id,
         source: e.source,
         target: e.target,
         sourceHandle: sh,
         targetHandle: th,
-        ...(transfer ? { markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--graph-edge)', width: 14, height: 14 } } : {}),
+        ...(transfer || directed ? { markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--graph-edge)', width: 14, height: 14 } } : {}),
         style: {
           stroke: derived ? 'var(--accent)' : 'var(--graph-edge)',
           strokeWidth: transfer ? Math.min(3.5, 1.25 + 0.5 * (transfers - 1)) : 1.25,
-          strokeDasharray: transfer ? undefined : derived ? '2 4' : '5 4',
+          strokeDasharray: transfer || directed ? undefined : derived ? '2 4' : '5 4',
         },
-        ...(derived ? { label: e.type === 'same_device' ? 'same device' : 'same session', labelStyle: { fill: 'var(--text-2)', fontSize: 11 }, labelBgStyle: { fill: 'var(--surface-2)' } } : {}),
+        ...(label ? { label, labelStyle: { fill: 'var(--text-2)', fontSize: 11 }, labelBgStyle: { fill: 'var(--surface-2)' } } : {}),
         selectable: false,
       } as Edge;
     });

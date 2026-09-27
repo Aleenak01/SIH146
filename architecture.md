@@ -299,9 +299,9 @@ Transactions / Network, Settings; light and dark themes authored separately.
   empty; offers to load the demo data into an empty backend; reloads when the monitor completes a newer run.
 - **Dashboard:** counts, monitoring strip (source label, last transaction, last analysis, state, new leads).
 - **Anomalies:** the lead queue (default with the backend), ML-flagged / not flagged / all, priority filter, expandable reasons, Create case.
-- **Wallet:** evidence, behavioural profile against the population, counterparty graph, related entities, case actions.
-- **Cases:** list, detail with saved evidence and today's values, notes, history, graph (optional synthetic infrastructure), related transactions, export.
-- **Transactions / Network:** transactions with details and synthetic observations; network explorer and path trace; **Clusters** tab and synthetic entity pages.
+- **Wallet:** evidence, behavioural profile against the population, counterparty graph, related entities (clusters, address entity, peeling chain membership), on-demand risk propagation, case actions.
+- **Cases:** list, detail with saved evidence and today's values, notes, history, graph (optional synthetic infrastructure), related transactions (with CoinJoin badges), export; items can be a lead, wallet, transaction, cluster or address entity.
+- **Transactions / Network:** transactions with details and synthetic observations; network explorer and path trace; **Clusters** tab and synthetic entity pages; **Entities** tab (common-input-ownership address entities, Phase 2/3 Part B); CoinJoin badge on transaction rows.
 - **Search** in the sidebar; **Settings** for monitoring, the real-source status (read-only), confirmations and exports.
 
 ## Not built / future
@@ -369,11 +369,19 @@ control", never proof -- and is known to be broken by CoinJoin-like transactions
 returns `rich_data_available: false` if no rich data has been imported for that source yet.
 
 **API (4 new endpoints, count 53 -> 57):** `GET /api/entities` (paging; filters `min_addresses`, `country`, `asn`,
-`ip`, `q`), `GET /api/entities/{id}` (addresses, spending transactions, IP/ASN/country links, related entities,
-findings), `GET /api/entity-graph` (focus `entity`/`address`/`ip`/`txid`; node types `entity`/`address`/
-`transaction`/`ip`/`asn`/`country`; edge types `in_entity`/`input_of`/`output_to`/`sent_from_ip`/`in_asn`/
-`in_country`/`shared_ip`; depth and node caps with a `truncated` flag, same style as `/api/graph`). This is a
-separate graph from the wallet-level `/api/graph`; neither reads the other. No UI in this phase.
+`ip`, `q`, and — added in Phase 3 Part B — `wallet`), `GET /api/entities/{id}` (addresses, spending transactions,
+IP/ASN/country links, related entities, findings), `GET /api/entity-graph` (focus `entity`/`address`/`ip`/`txid`;
+node types `entity`/`address`/`transaction`/`ip`/`asn`/`country`; edge types `in_entity`/`input_of`/`output_to`/
+`sent_from_ip`/`in_asn`/`in_country`/`shared_ip`; depth and node caps with a `truncated` flag, same style as
+`/api/graph`). This is a separate graph from the wallet-level `/api/graph`; neither reads the other.
+
+**Read-only wallet cross-reference, added Phase 3 Part B** (`entity_queries.linked_wallets_for_entities`): every
+`GET /api/entities` and `GET /api/entities/{id}` response now also carries `linked_wallets` — the wallet(s) that
+sent a transaction the entity spent from, found by joining `address_entity_members` -> `tx_inputs` ->
+`transactions.sender_wallet`. This is presentational only, computed after the entity is built, and is never read
+back into the union-find in `analysis/entities.py` (rule 1 above still holds -- checked by the same leak test). The
+`wallet` filter on `GET /api/entities` uses the same join, in reverse, to answer "which entities did this wallet's
+spending touch".
 
 **Offline validation** (`scripts/validate_entities.py`, **not** part of the backend or the analysis pipeline):
 builds its own scratch database, imports the rich dataset, runs the entity build, and compares the result with
@@ -431,10 +439,45 @@ from `transactions`), `coinjoin_candidates` (built from the rich tables).
 peeling + CoinJoin together and prints a summary; idempotent (replaces what was stored for that source). Recommended
 order: `detect-patterns` before (re-)running `build-entities`, so CoinJoin exclusion takes effect.
 
-**API (4 new endpoints, count 57 -> 61):** `GET /api/peeling-chains` (paging; filter `wallet`), `GET
-/api/peeling-chains/{chain_id}` (its hops in order), `GET /api/coinjoin-candidates` (paging), `POST
-/api/risk/propagate` (body: `seed_wallets`, optional `max_hops`/`decay_per_hop`overrides -> ranked
-`{wallet, propagated_score, hop_distance, path}`). No UI in this phase.
+**API (4 new endpoints, count 57 -> 61):** `GET /api/peeling-chains` (paging; filter `wallet`; each item's
+`wallets` field -- added Phase 3 Part B -- is every wallet appearing in any hop of the chain, not only the two
+endpoints, so a UI filter can ask "is this wallet part of *any* peeling chain" in one page fetch instead of one
+detail call per chain), `GET /api/peeling-chains/{chain_id}` (its hops in order), `GET /api/coinjoin-candidates`
+(paging), `POST /api/risk/propagate` (body: `seed_wallets`, optional `max_hops`/`decay_per_hop` overrides -> ranked
+`{wallet, propagated_score, hop_distance, path}`).
+
+## Frontend for entities and pattern detectors (Phase 3, Part B)
+Phase 2 shipped with no UI at all, and Phase 3 Part A's three detectors were API-only; Part B gives both a UI,
+reusing the existing design system exactly (`Panel`, `PageHeader`, `data-table`, the `seg` tablist + `?view=` query
+param, `PriorityPill`/`PredictionText`/`rule-tag`/`chip-link`, the `related-block` pattern, `ApiGraph`). No new CSS
+file was needed -- every new panel is built entirely from classes that already existed.
+
+- **Entities tab** (`frontend/src/components/EntitiesView.tsx`), a 4th tab on `/network` (`?view=entities`),
+  structured like `ClustersView.tsx`: a filter row (address or entity id), a list table (entity id, address count,
+  linked wallets, transaction count), and an `EntityPanel` detail (metrics-3, member addresses, correlation
+  findings, an `ApiGraph` mini-graph via `/api/entity-graph`, "Create case from entity"). Its disclaimer
+  deliberately says the opposite of the Clusters tab's: an entity **is** an ownership inference (heuristic, not
+  proof), where a cluster is connected activity, not ownership.
+- **`RelatedEntities.tsx`** (used by Wallet Detail and the Network page) gained two more `related-block`s beside
+  its existing Clusters and Network-observations blocks: **Address entity** (`GET /api/entities?wallet=`) and
+  **Peeling chain membership** (`GET /api/peeling-chains?wallet=`), the latter expandable per chain to its full hop
+  sequence (`GET /api/peeling-chains/{chain_id}`), highlighting this wallet's hop.
+- **CoinJoin badge**: `TransactionTable.tsx` takes an optional `coinjoinIds` prop and renders a `possible CoinJoin`
+  `rule-tag` next to the transaction id when it is in the set -- same mechanism as the existing `repeated` tag. Both
+  callers (`Network.tsx`'s transactions view, `CaseDetail.tsx`) fetch `GET /api/coinjoin-candidates` once and pass
+  the ids down.
+- **Anomalies filter**: a `Part of a peeling chain` checkbox, same `check`-class pattern as the existing filters,
+  matching against the union of every peeling chain's `wallets` field (one `GET /api/peeling-chains?limit=500`
+  call, not one per chain).
+- **Risk propagation panel** on Wallet Detail: calls `POST /api/risk/propagate` with the current wallet as the sole
+  seed on demand (nothing is auto-run or stored), shows the ranked results in a `data-table`.
+- **Case item type extended to "entity"** (`backend/schemas.py`'s `ItemType`, `backend/services/cases.py`): the
+  same generic case-item mechanism already used for `cluster` (`ADDED_ACTION`, `build_snapshot`, `_current`,
+  `_counts`, `graph_seed_wallets`) was extended rather than faking "create case from entity" through a wallet item,
+  since an entity has no owning wallet of its own. `graph_seed_wallets` seeds the case graph from the entity's
+  `linked_wallets`. `entity_queries.get_entity_detail`'s dict return (unlike the Pydantic-model-backed cluster/lead
+  snapshots) needed its datetimes converted by hand before going into the JSON `evidence_snapshot` column --
+  `services/cases.py::_json_safe`.
 
 ## Credits
 IP geolocation by DB-IP.com (https://db-ip.com), CC BY 4.0. Country and ASN lookups use the DB-IP Lite databases in `data/geoip/`.

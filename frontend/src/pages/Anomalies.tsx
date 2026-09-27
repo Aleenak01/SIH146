@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
+import { api, qs } from '../api/client';
+import type { PeelingChainPage } from '../api/types';
 import { PageHeader } from '../components/bits';
 import { CreateCaseDialog } from '../components/CreateCaseDialog';
 import { WalletTable, type SortKey, type SortState } from '../components/WalletTable';
@@ -45,9 +47,28 @@ export function Anomalies() {
   const evidence = (sp.get('evidence') as EvidenceLevel | null) ?? 'any';
   const priority = sp.get('priority') ?? 'any';
   const query = sp.get('q') ?? '';
+  const peelingOnly = sp.get('peeling') === '1';
 
   const [sort, setSort] = useState<SortState>({ key: 'combined', dir: 'desc' });
   const [page, setPage] = useState(0);
+  const [peelingWallets, setPeelingWallets] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!withLeads) return;
+    let live = true;
+    api.get<PeelingChainPage>(`/api/peeling-chains${qs({ limit: 500 })}`).then(
+      (p) => {
+        if (!live) return;
+        const s = new Set<string>();
+        for (const c of p.items) for (const w of c.wallets) s.add(w);
+        setPeelingWallets(s);
+      },
+      () => live && setPeelingWallets(new Set()),
+    );
+    return () => {
+      live = false;
+    };
+  }, [withLeads]);
 
   const setParam = (patch: Record<string, string | null>) => {
     setPage(0);
@@ -92,7 +113,8 @@ export function Anomalies() {
           (status === 'any' || statusOf(w.id) === status) &&
           (evidence === 'any' || w.fusion.forensic_evidence_level === evidence) &&
           (priority === 'any' || w.lead?.priorityLevel === priority) &&
-          (!q || w.id.includes(q)),
+          (!q || w.id.includes(q)) &&
+          (!peelingOnly || peelingWallets.has(w.id)),
       )
       .sort((a, b) => {
         const x = value(a);
@@ -101,7 +123,7 @@ export function Anomalies() {
         return c * dir || a.priorityRank - b.priorityRank;
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallets, scope, status, evidence, priority, query, sort, statusOf]);
+  }, [wallets, scope, status, evidence, priority, query, peelingOnly, peelingWallets, sort, statusOf]);
 
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pages - 1);
@@ -198,6 +220,12 @@ export function Anomalies() {
           value={query}
           onChange={(e) => setParam({ q: e.target.value })}
         />
+        {withLeads && (
+          <label className="check">
+            <input type="checkbox" checked={peelingOnly} onChange={(e) => setParam({ peeling: e.target.checked ? '1' : null })} />
+            Part of a peeling chain
+          </label>
+        )}
         <span className="toolbar-count">
           {fmtInt(rows.length)} wallet{rows.length === 1 ? '' : 's'}
         </span>

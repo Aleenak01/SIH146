@@ -26,11 +26,13 @@ const COLS: { key: SortKey | null; label: string; align?: 'right' }[] = [
 export function TransactionTable({
   rows,
   flaggedIds,
+  coinjoinIds,
   pageSize = 25,
   emptyText = 'No transactions match.',
 }: {
   rows: Transfer[];
   flaggedIds: Set<string>;
+  coinjoinIds?: Set<string>;
   pageSize?: number;
   emptyText?: string;
 }) {
@@ -111,7 +113,10 @@ export function TransactionTable({
                     <td className="num mono">
                       {t.inputCount ?? '—'} / {t.outputCount ?? '—'}
                     </td>
-                    <td className="num mono muted">{t.id ?? t.row ?? '—'}</td>
+                    <td className="num mono muted">
+                      {t.id ?? t.row ?? '—'}
+                      {t.id && coinjoinIds?.has(t.id) && <span className="rule-tag rule-tag-inline">possible CoinJoin</span>}
+                    </td>
                   </tr>
                   {isOpen && (
                     <tr className="detail-row">

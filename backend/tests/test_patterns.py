@@ -443,6 +443,7 @@ def test_peeling_chains_list_and_detail_endpoints(client):
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 1 and body["items"][0]["chain_id"] == "PEEL-t1" and body["items"][0]["hop_count"] == 3
+    assert body["items"][0]["wallets"] == ["A0", "A1", "A2", "A3"]     # every wallet in the chain, not just the endpoints
 
     r = client.get("/api/peeling-chains", params={"wallet": "A2"})
     assert [i["chain_id"] for i in r.json()["items"]] == ["PEEL-t1"]

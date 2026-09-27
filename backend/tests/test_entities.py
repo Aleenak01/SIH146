@@ -279,6 +279,33 @@ def test_entities_list_filters(client):
     r = client.get("/api/entities", params={"q": "addr3"})
     assert [i["entity_id"] for i in r.json()["items"]] == ["CIO-addr2"]
 
+    r = client.get("/api/entities", params={"wallet": "wC"})
+    assert [i["entity_id"] for i in r.json()["items"]] == ["CIO-addr2"]
+    assert client.get("/api/entities", params={"wallet": "no-such-wallet"}).json()["items"] == []
+
+
+def test_entities_report_linked_wallets_for_investigator_context_only(client):
+    """linked_wallets is a read-only cross-reference (never used to build the entity itself)."""
+    db = client.app.state.db
+    _seed_rich_tx(db, tx_id="t1", wallet_a="wA", wallet_b="wB", input_addrs=["addr1", "addr2"], output_addrs=["addr9"], ts=datetime(2026, 1, 1))
+    _seed_rich_tx(db, tx_id="t2", wallet_a="wA", wallet_b="wC", input_addrs=["addr1"], output_addrs=["addr8"], ts=datetime(2026, 1, 2))
+    client.post("/api/entities/run")
+
+    items = client.get("/api/entities").json()["items"]
+    assert items[0]["linked_wallets"] == ["wA"]        # both t1 and t2 were sent by wA
+
+    detail = client.get(f"/api/entities/{items[0]['entity_id']}").json()
+    assert detail["linked_wallets"] == ["wA"]
+
+
+def test_entities_linked_wallets_reflect_every_sender_that_touched_the_entity(client):
+    db = client.app.state.db
+    _seed_rich_tx(db, tx_id="t1", wallet_a="wA", wallet_b="wB", input_addrs=["addr1", "addr2"], output_addrs=["addr9"], ts=datetime(2026, 1, 1))
+    _seed_rich_tx(db, tx_id="t2", wallet_a="wZ", wallet_b="wB", input_addrs=["addr2"], output_addrs=["addr7"], ts=datetime(2026, 1, 2))
+    client.post("/api/entities/run")
+    items = client.get("/api/entities").json()["items"]
+    assert set(items[0]["linked_wallets"]) == {"wA", "wZ"}
+
 
 def test_entity_not_found_returns_uniform_error(client):
     r = client.get("/api/entities/CIO-nope")

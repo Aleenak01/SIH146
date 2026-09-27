@@ -1,8 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
+import { api, qs } from '../api/client';
+import type { CoinJoinCandidatePage } from '../api/types';
 import { EvidenceCell, PageHeader, Panel, PredictionText, StatusPill } from '../components/bits';
 import { ClustersView } from '../components/ClustersView';
+import { EntitiesView } from '../components/EntitiesView';
 import { RelatedEntities } from '../components/RelatedEntities';
 import { TransactionTable } from '../components/TransactionTable';
 import { TRANSFER_COLUMNS, downloadCsv, stamp, transferRows } from '../data/export';
@@ -14,7 +17,7 @@ import { useCases } from '../state/cases';
 import { useConfirm } from '../state/confirm';
 import { useBackend, useDataset, useFlaggedIds, useTransfers } from '../state/data';
 
-type View = 'transactions' | 'network' | 'clusters';
+type View = 'transactions' | 'network' | 'clusters' | 'entities';
 
 /** Query-string state, so every link elsewhere in the app can open this page pre-filtered. */
 function useParamState() {
@@ -36,7 +39,14 @@ export function Network() {
   const { get, set } = useParamState();
   const { mode } = useBackend();
   const requested = get('view');
-  const view: View = requested === 'network' ? 'network' : requested === 'clusters' && mode === 'api' ? 'clusters' : 'transactions';
+  const view: View =
+    requested === 'network'
+      ? 'network'
+      : requested === 'clusters' && mode === 'api'
+        ? 'clusters'
+        : requested === 'entities' && mode === 'api'
+          ? 'entities'
+          : 'transactions';
   const { transfers, error } = useTransfers();
 
   return (
@@ -46,7 +56,9 @@ export function Network() {
         subtitle={
           view === 'clusters'
             ? 'Groups of wallets connected by shared synthetic network observations or by dense transfer activity. Clusters are derived by the analysis and indicate connected activity, not common ownership or wrongdoing.'
-            : 'Search the synthetic transaction dataset and explore who transacted with whom. Every row and every link comes from the dataset; nothing is inferred.'
+            : view === 'entities'
+              ? 'Groups of addresses inferred to be under common ownership by the common-input-ownership heuristic. Unlike clusters, an entity IS an ownership inference — a heuristic, not proof.'
+              : 'Search the synthetic transaction dataset and explore who transacted with whom. Every row and every link comes from the dataset; nothing is inferred.'
         }
         actions={
           <div className="seg" role="tablist" aria-label="View">
@@ -61,13 +73,19 @@ export function Network() {
                 Clusters
               </button>
             )}
+            {mode === 'api' && (
+              <button type="button" role="tab" aria-selected={view === 'entities'} className={view === 'entities' ? 'on' : ''} onClick={() => set({ view: 'entities' })}>
+                Entities
+              </button>
+            )}
           </div>
         }
       />
       {view === 'clusters' && <ClustersView />}
-      {view !== 'clusters' && error && <div className="empty-block">Could not load transactions: {error}</div>}
-      {view !== 'clusters' && !error && !transfers && <div className="empty-block">Loading transactions…</div>}
-      {view !== 'clusters' && transfers && (view === 'transactions' ? <TransactionsView transfers={transfers} /> : <NetworkView transfers={transfers} />)}
+      {view === 'entities' && <EntitiesView />}
+      {view !== 'clusters' && view !== 'entities' && error && <div className="empty-block">Could not load transactions: {error}</div>}
+      {view !== 'clusters' && view !== 'entities' && !error && !transfers && <div className="empty-block">Loading transactions…</div>}
+      {view !== 'clusters' && view !== 'entities' && transfers && (view === 'transactions' ? <TransactionsView transfers={transfers} /> : <NetworkView transfers={transfers} />)}
     </div>
   );
 }
@@ -77,9 +95,28 @@ export function Network() {
 // ---------------------------------------------------------------------------------------------
 const DAY = 86_400_000;
 
+/** Transaction ids flagged as CoinJoin-like candidates by the pattern detector (heuristic, never a certainty). */
+function useCoinjoinIds(): Set<string> {
+  const { mode } = useBackend();
+  const [ids, setIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (mode !== 'api') return;
+    let live = true;
+    api.get<CoinJoinCandidatePage>(`/api/coinjoin-candidates${qs({ limit: 500 })}`).then(
+      (p) => live && setIds(new Set(p.items.map((c) => c.transaction_id))),
+      () => live && setIds(new Set()),
+    );
+    return () => {
+      live = false;
+    };
+  }, [mode]);
+  return ids;
+}
+
 function TransactionsView({ transfers }: { transfers: Transfer[] }) {
   const { get, set, sp } = useParamState();
   const flaggedIds = useFlaggedIds();
+  const coinjoinIds = useCoinjoinIds();
   const { guard } = useConfirm();
 
   const q = get('q').trim().toLowerCase();
@@ -201,7 +238,7 @@ function TransactionsView({ transfers }: { transfers: Transfer[] }) {
         </button>
       </div>
 
-      <TransactionTable rows={rows} flaggedIds={flaggedIds} pageSize={25} emptyText="No transactions match these filters." />
+      <TransactionTable rows={rows} flaggedIds={flaggedIds} coinjoinIds={coinjoinIds} pageSize={25} emptyText="No transactions match these filters." />
     </>
   );
 }

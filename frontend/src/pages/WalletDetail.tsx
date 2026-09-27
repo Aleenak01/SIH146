@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { api } from '../api/client';
+import type { RiskPropagateOut } from '../api/types';
 import { EvidenceCell, PageHeader, Panel, PredictionText, PriorityPill, StatusPill } from '../components/bits';
 import { CreateCaseDialog } from '../components/CreateCaseDialog';
 import { RelatedEntities } from '../components/RelatedEntities';
@@ -293,6 +295,8 @@ export function WalletDetail() {
 
       {mode === 'api' && <RelatedEntities wallet={wallet} />}
 
+      {mode === 'api' && <RiskPropagationPanel wallet={wallet.id} />}
+
       <Panel title="Case">
         {existingCases.length > 0 ? (
           existingCases.map((c) => (
@@ -325,6 +329,81 @@ export function WalletDetail() {
         />
       )}
     </div>
+  );
+}
+
+/** On-demand risk propagation from this wallet as a seed, decayed per hop along the wallet transfer graph. Nothing
+ * is stored server-side; each click is a fresh call. A heuristic investigator aid, not a validated risk score. */
+function RiskPropagationPanel({ wallet }: { wallet: string }) {
+  const [result, setResult] = useState<RiskPropagateOut | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.post<RiskPropagateOut>('/api/risk/propagate', { seed_wallets: [wallet] }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel
+      title="Risk propagation from seed wallets"
+      note="Propagates a risk score outward from this wallet along its transfer graph, decaying with each hop. Computed on demand and never stored; a heuristic investigator aid, not a validated risk score."
+      actions={
+        <button type="button" className="btn btn-sm" onClick={() => void run()} disabled={busy}>
+          {busy ? 'Propagating…' : result ? 'Re-run' : 'Propagate risk'}
+        </button>
+      }
+    >
+      {error && <p className="field-error">Could not propagate risk: {error}</p>}
+      {!result && !error && <p className="muted">Not yet run. Propagates outward from {wallet}.</p>}
+      {result && (
+        <>
+          <div className="table-wrap">
+            <table className="data-table compact">
+              <thead>
+                <tr>
+                  <th>Wallet</th>
+                  <th className="num">Propagated score</th>
+                  <th className="num">Hops</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.items.map((r) => (
+                  <tr key={r.wallet}>
+                    <td>
+                      <Link to={`/wallets/${r.wallet}`} className="mono wallet-link">
+                        {r.wallet}
+                      </Link>
+                    </td>
+                    <td className="num mono">{fmtScore(r.propagated_score)}</td>
+                    <td className="num mono">{r.hop_distance}</td>
+                    <td className="mono muted">{r.path.join(' → ')}</td>
+                  </tr>
+                ))}
+                {result.items.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="empty">
+                      No wallet reached within {result.max_hops} hops of {wallet}.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <p className="graph-foot">
+            Decay {result.decay_per_hop} per hop, up to {result.max_hops} hops. {result.note}
+          </p>
+        </>
+      )}
+    </Panel>
   );
 }
 

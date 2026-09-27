@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import select
@@ -18,6 +19,18 @@ def _chain_out(c: PeelingChain) -> dict[str, Any]:
     }
 
 
+def _chain_wallets(session: Session, chain_ids: list[str]) -> dict[str, list[str]]:
+    """{chain_id: every wallet appearing in any of its hops (start, end and every intermediate hop)}, for a bounded set of chains (a page)."""
+    if not chain_ids:
+        return {}
+    rows = session.execute(select(PeelingChainHop.chain_id, PeelingChainHop.from_wallet, PeelingChainHop.to_wallet).where(PeelingChainHop.chain_id.in_(chain_ids))).all()
+    out: dict[str, set[str]] = defaultdict(set)
+    for cid, frm, to in rows:
+        out[cid].add(frm)
+        out[cid].add(to)
+    return {cid: sorted(ws) for cid, ws in out.items()}
+
+
 def list_peeling_chains(session: Session, *, source: str | None, wallet: str | None, limit: int, offset: int) -> tuple[int, list[dict[str, Any]]]:
     stmt = select(PeelingChain)
     if source:
@@ -29,7 +42,9 @@ def list_peeling_chains(session: Session, *, source: str | None, wallet: str | N
         chains = [c for c in chains if c.chain_id in chain_ids_with_wallet]
     chains.sort(key=lambda c: (-c.hop_count, c.chain_id))
     total = len(chains)
-    return total, [_chain_out(c) for c in chains[offset: offset + limit]]
+    page = chains[offset: offset + limit]
+    wallets = _chain_wallets(session, [c.chain_id for c in page])
+    return total, [{**_chain_out(c), "wallets": wallets.get(c.chain_id, [])} for c in page]
 
 
 def get_peeling_chain_detail(session: Session, chain_id: str) -> dict[str, Any] | None:

@@ -76,7 +76,7 @@ def test_case_from_a_lead_with_every_kind_of_item(networked_client, networked_an
         "items": [{"type": "lead", "id": lead, "note": "top of the queue"}, {"type": "wallet", "id": "w010"}, {"type": "transaction", "id": tx_id}, {"type": "cluster", "id": cluster}]})
     assert r.status_code == 201
     d = r.json()
-    assert d["item_counts"] == {"lead": 1, "wallet": 1, "transaction": 1, "cluster": 1} and d["priority"] == "High" and d["assigned_to"] == "A. Analyst"
+    assert d["item_counts"] == {"lead": 1, "wallet": 1, "transaction": 1, "cluster": 1, "entity": 0} and d["priority"] == "High" and d["assigned_to"] == "A. Analyst"
     assert actions(d) == ["case_created", "lead_added", "wallet_added", "transaction_added", "cluster_added", "note_added"]
     assert "top of the queue" in d["history"][1]["detail"] and d["notes"][0]["detail"] == "opening note"
     snaps = {i["item_type"]: i["evidence_snapshot"] for i in d["items"]}
@@ -213,7 +213,7 @@ def test_listing_and_filters(networked_client):
     assert ids(item_id=lead) == [a] and ids(item_type="wallet", item_id=lead) == [] and ids(item_type="lead", item_id=lead) == [a]
     page = networked_client.get("/api/cases", params={"limit": 2, "offset": 1, "sort": "case_id", "order": "asc"}).json()
     assert page["total"] == 3 and [x["case_id"] for x in page["items"]] == [b, c]
-    assert page["items"][0]["item_counts"] == {"lead": 0, "wallet": 1, "transaction": 0, "cluster": 0}
+    assert page["items"][0]["item_counts"] == {"lead": 0, "wallet": 1, "transaction": 0, "cluster": 0, "entity": 0}
     for bad in ({"status": "x"}, {"priority": "x"}, {"sort": "title"}, {"limit": 0}, {"item_type": "person"}):
         assert networked_client.get("/api/cases", params=bad).status_code == 422
     assert networked_client.get("/api/cases/CASE-9999").json()["error"]["code"] == "not_found"
@@ -270,6 +270,66 @@ def test_cluster_knows_which_cases_hold_it(networked_client):
     assert networked_client.get(f"/api/clusters/{cid}").json()["case_ids"] == []
     case = networked_client.post("/api/cases", json={"title": "c", "items": [{"type": "cluster", "id": cid}]}).json()["case_id"]
     assert networked_client.get(f"/api/clusters/{cid}").json()["case_ids"] == [case]
+
+
+# ---- address entities as a case item (Phase 3 Part B) ------------------------------------------------------------------------
+def _seed_entity(client, *, wallet_a="wA", wallet_b="wB") -> str:
+    """One rich transaction (2 co-spent addresses) + a built entity, on the same live database the TestClient uses."""
+    from datetime import datetime
+
+    from backend.models import Transaction, TxDetails, TxInput, TxOutput, Wallet
+
+    db = client.app.state.db
+    with db.transaction() as s:
+        for w in (wallet_a, wallet_b):
+            if s.get(Wallet, w) is None:
+                s.add(Wallet(address=w, source="synthetic"))
+        s.flush()
+        s.add(Transaction(transaction_id="entity-seed-t1", timestamp=datetime(2026, 1, 1), sender_wallet=wallet_a, receiver_wallet=wallet_b,
+                          amount_btc=1.0, input_count=2, output_count=1, source="synthetic"))
+        s.flush()
+        s.add(TxDetails(transaction_id="entity-seed-t1", txid="e" * 64, fee_btc=0.0001, script_type="p2wpkh", source="synthetic"))
+        s.add(TxInput(transaction_id="entity-seed-t1", position=0, address="entity-seed-addr1", amount_btc=0.5))
+        s.add(TxInput(transaction_id="entity-seed-t1", position=1, address="entity-seed-addr2", amount_btc=0.5))
+        s.add(TxOutput(transaction_id="entity-seed-t1", position=0, address="entity-seed-addr9", amount_btc=0.999))
+    r = client.post("/api/entities/run")
+    assert r.status_code == 200 and r.json()["entities"] == 1
+    return client.get("/api/entities").json()["items"][0]["entity_id"]
+
+
+def test_an_entity_can_be_added_to_a_case_with_its_own_evidence_snapshot(networked_client):
+    eid = _seed_entity(networked_client)
+    r = networked_client.post("/api/cases", json={"title": "Entity review", "items": [{"type": "entity", "id": eid}]})
+    assert r.status_code == 201, r.text
+    d = r.json()
+    assert d["item_counts"] == {"lead": 0, "wallet": 0, "transaction": 0, "cluster": 0, "entity": 1}
+    assert actions(d) == ["case_created", "entity_added"]
+    item = d["items"][0]
+    assert item["item_type"] == "entity" and item["item_id"] == eid
+    assert item["evidence_snapshot"]["kind"] == "entity" and set(item["evidence_snapshot"]["addresses"]) == {"entity-seed-addr1", "entity-seed-addr2"}
+    assert item["evidence_snapshot"]["linked_wallets"] == ["wA"]
+    assert item["current"] == {"exists": True, "address_count": 2, "transaction_count": 1, "total_sent_btc": 1.0, "total_received_btc": 0.0}
+
+
+def test_an_unknown_entity_id_is_rejected(networked_client):
+    r = networked_client.post("/api/cases", json={"title": "c", "items": [{"type": "entity", "id": "CIO-nope"}]})
+    assert r.status_code == 404 and "No address entity" in r.json()["error"]["message"]
+
+
+def test_the_case_graph_uses_the_entitys_linked_wallets_as_seeds(networked_client):
+    eid = _seed_entity(networked_client, wallet_a="w001", wallet_b="w002")
+    case = networked_client.post("/api/cases", json={"title": "c", "items": [{"type": "entity", "id": eid}]}).json()["case_id"]
+    g = networked_client.get(f"/api/cases/{case}/graph").json()
+    assert {n["label"] for n in g["nodes"] if n["type"] == "wallet"} >= {"w001"}
+
+
+def test_entity_item_does_not_affect_the_case_wallets_or_related_transactions_list(networked_client):
+    """Matches the existing precedent for 'cluster' items: only wallet/lead items and explicit transactions count
+    toward case_wallets()/related_transactions; an entity (like a cluster) only seeds the graph."""
+    eid = _seed_entity(networked_client, wallet_a="w003", wallet_b="w004")
+    case = networked_client.post("/api/cases", json={"title": "c", "items": [{"type": "entity", "id": eid}]}).json()["case_id"]
+    d = networked_client.get(f"/api/cases/{case}").json()
+    assert d["wallets"] == []
 
 
 # ---- persistence ---------------------------------------------------------------------------------------------------------------------------------
